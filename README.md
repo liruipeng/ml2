@@ -1,2 +1,2 @@
 # ml2
-multilevel NN trainings
+Multi-Level Machine Learning (MLML, $ML^2$)
