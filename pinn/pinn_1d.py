@@ -118,7 +118,7 @@ class PINN(nn.Module):
         y = self.forward(x)
         out = torch.zeros((x.shape[0], self.dim_outputs))
         for i in range(self.num_lev):
-            out += y[:, i * self.dim_outputs: (i + 1) * self.dim_outputs]
+            out += y[:, i * self.dim_outputs: (i + 1) * self.dim_outputs].to(out.device)
         return out
 
     # def _init_weights(self, m):
@@ -263,7 +263,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
             model.eval()
             with torch.no_grad():
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
-                error = u_analytic - u_eval
+                error = u_analytic - u_eval.to(u_analytic.device)
                 print(f"Iteration {i:6d}/{iterations:6d}, PINN Loss: {loss.item():.4e}, "
                       f"Err 2-norm: {torch.norm(error): .4e}, "
                       f"inf-norm: {torch.max(torch.abs(error)):.4e}")
@@ -274,7 +274,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
             with torch.no_grad():
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
-                error = u_analytic - u_eval
+                error = u_analytic - u_eval.to(u_analytic.device)
                 # plot
                 ax[ax_i].scatter(mesh.x_train.cpu().detach().numpy(), u_train.cpu().detach().numpy(), color="red",
                                  label="Sample training points")
@@ -330,3 +330,5 @@ if __name__ == "__main__":
     err = main()
     plt.show()
     sys.exit(err)
+
+# %%
