@@ -1,4 +1,3 @@
-#%%
 """
 1D PINN model to solve the problem:
             -u_xx + r*u = f
