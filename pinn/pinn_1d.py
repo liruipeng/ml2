@@ -297,12 +297,12 @@ def main():
     # Generate training data
     # number of point for training
     nx = 128
-    prob.w = [1, 8] # [1, 2, 4, 8, 16]
-    prob.c = [1, 0.1] # [1., 1., 1., 1., 1.]
+    prob.w = [10] # [1, 2, 4, 8, 16]
+    prob.c = [1] # [1., 1., 1., 1., 1.]
     prob.r = 0
     num_check = 20
     num_plots = 4
-    iterations = 5000
+    iterations = 10000
     # Domain is interval [ax, bx] along the x-axis
     ax = 0.0
     bx = 1.0
@@ -312,7 +312,7 @@ def main():
     #
     mesh = Mesh(ntrain=nx, neval=eval_resolution, ax=ax, bx=bx)
     # Create an instance of the PINN model
-    model = PINN(dim_inputs=1, dim_outputs=dim_outputs, dim_hidden=[64, 64], num_lev=3, act=nn.Tanh())
+    model = PINN(dim_inputs=1, dim_outputs=dim_outputs, dim_hidden=[64, 64], num_lev=1, act=nn.ReLU())
     print(model)
     model.to(device)
     # Exact solution
