@@ -1,8 +1,91 @@
 ---
 title: "An Introduction to NTK"
 author: "Shao-Ting Chiu"
+bibliography: "ref.bib"
+
 ---
+$$
+\def\v{\textbf}
+$$
 
-## NTK
+## Kernel Methods
 
-Here is an introduction
+
+**Kernel methods**: The kernel is a similarity function between two data points: $K: \chi \times \chi \to \mathbb{R}$. It describes how sensitive the predition for one data sample to predict for the other:
+
+- Kernel is symmetric: $K(x,x') = K(x', x)$
+
+Kernel methos is non-parametric, instant-based machine learning algorithms. Suppose we know all labels from training samples $\{x^{(i)}, y^{(i)}\}$. 
+
+- New input $x$: $x = \sum_{i} K(x^{(i)}, x) y^{(i)}$
+
+**Gaussian Processes**: A non-parametric method by multivariate Gaussian probability. Suppose a given data points $\{x^{(1), \dots, x^{(N)}}\}$. 
+
+- Covariance matrix: $\sum_{i,j} = K(x^{(i)}, x^{(j)})$
+
+
+## Neural tangent kernel (NTK)
+
+Neural tangent kernel (NTK) [@jacot2018neural] is for understanding neural network training via gradient descent. 
+
+
+**Loss function**: $\mathcal{L}: \mathbb{R}^P \to \mathbb{R}_{+}$: 
+
+$$
+\mathbb{L}(\theta) = \frac{1}{N}\sum^{N}_{i=1} l(f(\v{x}^{(i)}; \theta)\nabla_{f}l(f, y^{(i)}))
+$$
+
+the gradient of the loss is: 
+
+$$
+\nabla_{\theta}\mathcal{L}(\theta) = \frac{1}{N}\sum_{i=1}^{N} \underbrace{\nabla_{\theta} f(\v{x}^{(i)}; \theta)}_{\text{size } P\times n_L} \nabla_{f} \underbrace{l(f, y^{(i)})}_{\text{size } n_L \times 1}
+$${#eq-grad-loss}
+
+
+**Neural tangent**: for tracking how network parameter $\theta$ evolve in time, the @eq-grad-loss becomes an OD system of $\theta$: 
+
+$$
+\frac{d\theta}{dt} = - \nabla_{\theta} \mathcal{L}(\theta) = -\frac{1}{N}\sum^{N}_{i=1} \nabla_{\theta} f(\v{x}^{(i)}; \theta) \nabla_{f} l(f, y^{(i)})
+$$
+
+
+By the chain rule again,
+
+$$
+\frac{df(\mathbf{x};\theta)}{dt} 
+= \frac{df(\mathbf{x};\theta)}{d\theta}\frac{d\theta}{dt}
+= -\frac{1}{N} \sum_{i=1}^N \color{blue}{\underbrace{\nabla_\theta f(\mathbf{x};\theta)^\top \nabla_\theta f(\mathbf{x}^{(i)}; \theta)}_\text{Neural tangent kernel}} \color{black}{\nabla_f \ell(f, y^{(i)})}
+$$
+
+**Neural Tangent Kernel (NTK)** is described as 
+
+$$
+K(\mathbf{x}, \mathbf{x}'; \theta) = \nabla_\theta f(\mathbf{x};\theta)^\top \nabla_\theta f(\mathbf{x}'; \theta)
+$$
+
+where for each entry in the output matrix at location $(m,n), 1 \leq m,n \leq n_L$
+
+$$
+K_{m,n}(\mathbf{x}, \mathbf{x}'; \theta) = \sum_{p=1}^P \frac{\partial f_m(\mathbf{x};\theta)}{\partial \theta_p} \frac{\partial f_n(\mathbf{x}';\theta)}{\partial \theta_p}
+$$
+
+## Infinite width networks
+
+The output of L-layer network $f_i(\v{x};\theta)$ for $i=1,\dots,n_L$ are i.i.di centered Gaussian Process of covariance $\sum^{(L)}$, defined recursively as 
+
+$$
+\begin{aligned}
+\Sigma^{(1)}(\mathbf{x}, \mathbf{x}') &= \frac{1}{n_0}\mathbf{x}^\top{\mathbf{x}'} + \beta^2 \\
+\lambda^{(l+1)}(\mathbf{x}, \mathbf{x}') &= \begin{bmatrix}
+\Sigma^{(l)}(\mathbf{x}, \mathbf{x}) & \Sigma^{(l)}(\mathbf{x}, \mathbf{x}') \\
+\Sigma^{(l)}(\mathbf{x}', \mathbf{x}) & \Sigma^{(l)}(\mathbf{x}', \mathbf{x}')
+\end{bmatrix} \\
+\Sigma^{(l+1)}(\mathbf{x}, \mathbf{x}') &= \mathbb{E}_{f \sim \mathcal{N}(0, \lambda^{(l)})}[\sigma(f(\mathbf{x})) \sigma(f(\mathbf{x}'))] + \beta^2
+\end{aligned}
+$$
+
+
+
+@jacot2018neural
+
+@weng2022ntk
