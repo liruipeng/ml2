@@ -116,41 +116,40 @@ def predict_psnr(kernel_fn, y_test, pred0f_test, ab, t_final, eta=None):
 predict_psnr = jit(predict_psnr, static_argnums=(0,))
 
 def optimize(rand_key, network_size, y_test, y_gt, t_final, ab_init, name, kernel_lr=.01, iters=800):
-  with jax.disable_jit():
-    kernel_fn = make_network(*network_size)[-1]
+  kernel_fn = make_network(*network_size)[-1]
 
-    def spectrum_loss(params):
-        pred_test = predict(kernel_fn, np.fft.fft(y_test), np.zeros_like(y_test), (params[0], ab_init[1]), t_final)[0]
-        return .5 * np.mean(np.abs(y_test[1::2] - pred_test)**2) / np.prod(y_test[-1:])#np.prod(y_test.shape[-1:])
+  def spectrum_loss(params):
+      pred_test = predict(kernel_fn, np.fft.fft(y_test), np.zeros_like(y_test), (params[0], ab_init[1]), t_final)[0]
+      return .5 * np.mean(np.abs(y_test[1::2] - pred_test)**2) / np.prod(y_test[-1:])#np.prod(y_test.shape[-1:])
 
-    loss_grad = jit(jax.value_and_grad(spectrum_loss))
+  loss_grad = jit(jax.value_and_grad(spectrum_loss))
 
-    kernel_opt_init, kernel_opt_update, kernel_get_params = optimizers.adam(kernel_lr)
-    a_noise = np.abs(random.normal(rand_key, ab_init[0].shape)) * .001
-    kernel_opt_state = kernel_opt_init((ab_init[0] + a_noise, ab_init[1]))
+  kernel_opt_init, kernel_opt_update, kernel_get_params = optimizers.adam(kernel_lr)
+  a_noise = np.abs(random.normal(rand_key, ab_init[0].shape)) * .001
+  kernel_opt_state = kernel_opt_init((ab_init[0] + a_noise, ab_init[1]))
 
-    losses = []
-    # plotlosses = PlotLosses()
-    groups = {'losses {}'.format(name): ['curr_test', 'gt_test', 'gt_train'],}
-    plotlosses = PlotLosses(groups=groups)
-    print('begin')
-    for i in range(iters):
-        ab = kernel_get_params(kernel_opt_state)
-        # ab = (ab[0], ab_init[1])
-        loss, grad = loss_grad(ab)
-        kernel_opt_state = kernel_opt_update(i, grad, kernel_opt_state)
+  losses = []
+  # plotlosses = PlotLosses()
+  groups = {'losses {}'.format(name): ['curr_test', 'gt_test', 'gt_train'],}
+  plotlosses = PlotLosses(groups=groups)
+  print('begin')
+  for i in range(iters):
+      ab = kernel_get_params(kernel_opt_state)
+      # ab = (ab[0], ab_init[1])
+      loss, grad = loss_grad(ab)
+      kernel_opt_state = kernel_opt_update(i, grad, kernel_opt_state)
 
-        gt_vals = predict_psnr(kernel_fn, y_gt, np.zeros_like(y_gt), ab, t_final)
+      gt_vals = predict_psnr(kernel_fn, y_gt, np.zeros_like(y_gt), ab, t_final)
 
-        # plotlosses.update({'curr_test':-10.*np.log10(2.*loss),}, current_step=i)
-        plotlosses.update({'curr_test':-10.*np.log10(2.*loss),
-                            'gt_test': gt_vals[0],
-                            'gt_train': gt_vals[1],}, current_step=i)
-        if i % 20 == 0:
-            plotlosses.send()
+      # plotlosses.update({'curr_test':-10.*np.log10(2.*loss),}, current_step=i)
+      plotlosses.update({'curr_test':-10.*np.log10(2.*loss),
+                          'gt_test': gt_vals[0],
+                          'gt_train': gt_vals[1],}, current_step=i)
+      if i % 20 == 0:
+          plotlosses.send()
 
-    avals_optimized = kernel_get_params(kernel_opt_state)[0]
-    return avals_optimized
+  avals_optimized = kernel_get_params(kernel_opt_state)[0]
+  return avals_optimized
 
 """# Make fig 3"""
 
