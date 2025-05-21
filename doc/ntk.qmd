@@ -71,7 +71,7 @@ $$
 
 ## Infinite width networks
 
-The output of L-layer network $f_i(\v{x};\theta)$ for $i=1,\dots,n_L$ are i.i.di centered Gaussian Process of covariance $\sum^{(L)}$, defined recursively as 
+The output of L-layer network $f_i(\v{x};\theta)$ for $i=1,\dots,n_L$ are i.i.d centered Gaussian Process of covariance $\sum^{(L)}$, defined recursively as 
 
 $$
 \begin{aligned}
