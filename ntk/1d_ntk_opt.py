@@ -14,6 +14,7 @@ from jax import random, grad, jit, vmap
 from jax import config
 #config.update("jax_enable_x64", True)
 #jax.config.update("jax_debug_nans", True)
+jax.config.update('jax_platform_name', 'cpu')
 from jax.lib import xla_bridge
 import jax.numpy as np
 import neural_tangents as nt
@@ -259,6 +260,7 @@ for d_key in tqdm(s_dict):
     z = vmap(train_fn, in_axes=(0, 0))(s_list, ensemble_key)
     outputs[d_key][k] = z
 
+#%%
 """#Figure"""
 
 H_rows = {k : compute_ntk(x_train, *ab_dict[k], make_network(*(network_size))[-1]) for k in ab_dict if 'opt' in k}
