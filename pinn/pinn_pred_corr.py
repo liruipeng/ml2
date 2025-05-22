@@ -176,7 +176,7 @@ u_exact=u_ex(mesh.x_train_tensor)
 
 
 model.train() # this tells pytorch to update the weigths
-train(model, mesh, iterations=70000, learning_rate=1e-3)
+train(model, mesh, iterations=150000, learning_rate=1e-3)
 
 model.eval()
 prediction = model.forward(mesh.x_train_tensor)

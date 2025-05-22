@@ -11,9 +11,9 @@ Original file is located at
 
 import jax
 from jax import random, grad, jit, vmap
-from jax.config import config
-config.update("jax_enable_x64", True)
-jax.config.update("jax_debug_nans", True)
+from jax import config
+#config.update("jax_enable_x64", True)
+#jax.config.update("jax_debug_nans", True)
 from jax.lib import xla_bridge
 import jax.numpy as np
 import neural_tangents as nt
@@ -88,10 +88,10 @@ def predict(kernel_fn, yf_test, pred0f_test, ab, t_final, eta=None):
   H_row_test = compute_ntk(x_test,  *ab, kernel_fn)
   H_t = np.real(np.fft.fft(H_row_test))
   H_d_tile = alias_tile(H_t)
-  if eta is None:
-    H_d_tile_train = 1. - np.exp(-t_final * H_d_tile)
-  else:
-    H_d_tile_train = 1. - (1. - eta * H_d_tile) ** t_final
+  #if eta is None:
+  H_d_tile_train = 1. - np.exp(-t_final * H_d_tile)
+  #else:
+    #H_d_tile_train = 1. - (1. - eta * H_d_tile) ** t_final
   yf_train_tile = alias_tile(yf_test)
   pred0f_train_tile = alias_tile(pred0f_test)
   exp_term = H_d_tile_train * (yf_train_tile - pred0f_train_tile)
@@ -121,7 +121,7 @@ def optimize(rand_key, network_size, y_test, y_gt, t_final, ab_init, name, kerne
 
     def spectrum_loss(params):
         pred_test = predict(kernel_fn, np.fft.fft(y_test), np.zeros_like(y_test), (params[0], ab_init[1]), t_final)[0]
-        return .5 * np.mean(np.abs(y_test[1::2] - pred_test)**2) / np.prod(y_test[-1:])#np.prod(y_test.shape[-1:])
+        return .5 * np.mean(np.abs(y_test[1::2] - pred_test)**2) #aa/ np.prod(y_test[-1:])#np.prod(y_test.shape[-1:])
 
     loss_grad = jit(jax.value_and_grad(spectrum_loss))
 
