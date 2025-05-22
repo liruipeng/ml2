@@ -1,6 +1,6 @@
 ---
 title: "NTK, its application on PINN and multi-scale NN"
-author: "Shao-Ting Chiu"
+author: "Steven Chiu (chiu26@llnl.gov)"
 bibliography: "ref.bib"
 
 ---
@@ -135,12 +135,21 @@ $$
 
 ## How to measure NTK?
 
+- Neural Network Gaussian Processes (NNGP): infinite wide Bayesian nerual network.
+- Neural Tangent Kernel (NTK): Randomly initialized infinite wide neural networks trained with gradient descent.
+
+1. Derive by hand
+2. Use Monte Carlo approach
+
+This notebook galllery has numerous examples about how to use NTK to analyze gradient descent: 
+
+https://github.com/google/neural-tangents/tree/main/notebooks
+
 
 Examples: 
 
 1. Why PINN sometimes fails? [@wang2020and]: https://github.com/PredictiveIntelligenceLab/PINNsNTK
-2. Fourier feature [@tancik2020fourier]: https://github.com/tancik/fourier-feature-networks 
-3. 
+2. Fourier feature [@tancik2020fourier]: https://github.com/tancik/fourier-feature-networks ([notebook](https://colab.research.google.com/github/tancik/fourier-feature-networks/blob/master/Experiments/1d_ntk_opt.ipynb#scrollTo=mVXVRH6F7gw5)) ([great video](https://neuralfields.cs.brown.edu/paper_46.html))
 
 
 ## Examples of NTK
@@ -184,4 +193,3 @@ In @liu2022hierarchical , they propose a multi-scale time stepping for ODE. Inst
 ## Questions
 
 1. What is the behavior of MultiScale DNN [@liu2020multi] on residual loss of PDE, does Ritz method a necessary? Is there NTK explaination to backup their design have better convergence rate on high frequency? How many `nx` is needed
-2. 
