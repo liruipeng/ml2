@@ -1,0 +1,3 @@
+[submodule "neural-tangents"]
+	path = neural-tangents
+	url = https://github.com/stevengogogo/neural-tangents.git
