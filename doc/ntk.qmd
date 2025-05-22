@@ -1,5 +1,5 @@
 ---
-title: "An Introduction to NTK"
+title: "NTK, its application on PINN and multi-scale NN"
 author: "Shao-Ting Chiu"
 bibliography: "ref.bib"
 
@@ -7,6 +7,9 @@ bibliography: "ref.bib"
 $$
 \def\v{\textbf}
 $$
+
+
+The original NTK paper is @jacot2018neural, and this tutorial @weng2022ntk has great exlaination.
 
 ## Kernel Methods
 
@@ -84,8 +87,101 @@ $$
 \end{aligned}
 $$
 
+## NTK for PINNs 
+
+Let 
+
+- solution: $u(t) = u(\v{x}_b, \theta(t)) = \{u(\v{x}^{i}_{b}. \theta(t))\}_{i=1}^{N_b}$.
+- DE: $\mathcal{L}u(\v{x}_r, \theta(t)) = \{\mathcal{L}u(\v{x}_r, \theta(t))\}^{N_r}_{i=1}$
+
+where $\theta(t)$ is parameters of a NN that changes over gradient descent.
+
+::: {#lem-ntk-pinn}
+
+## NTK for PINNs
+
+@wang2020and 
+
+$$
+\begin{bmatrix}
+    \frac{du(\v{x}_b, \theta(t))}{dt}\\
+    \frac{d\mathcal{L}u(\v{x}_r, \theta(t))}{dt}
+\end{bmatrix} = - \begin{bmatrix}
+    K_{uu}(t) & K_{ur}(t)\\
+    K_{ru}(t) & K_{rr}(t)
+\end{bmatrix} \cdot 
+\begin{bmatrix}
+    u(\v{x}_b, \theta(t)) - g(x_b)\\
+    \mathcal{L}u(\v{x}_r, \theta(t)) - f(\v{x}_r)
+\end{bmatrix}
+$$
+
+where $K_{ru}(t) = K^{T}_{ur}(t)$ and $K_{uu}(t) \in \mathbb{R}^ {N_b \times N_b}$, $N_{ur}(t) \in \mathbb{R}^{N_b\times N_r}$, and $K_{rr}(t) \in \mathbb{R}^{N_r \times N_r}$ with $(i, j)$-th entry is given by
+
+$$
+\begin{split}
+    (K_{uu})_{ij}(t) &=  \frac{du(x^{i}_b, \theta(t))}{d\theta}, \frac{du(x^{i}_{b}, \theta(t))}{d\theta} >\\
+    &= \sum_{\theta \in \Theta} \frac{du(x^{i}_{b}, \theta(t))}{d\theta} \cdot \frac{du(x_{b}^{i}, \theta(t))}{\theta}
+\end{split}
+$$
+
+:::
 
 
-@jacot2018neural
+## Usage
 
-@weng2022ntk
+1. Descide proper structure of NN 
+2. Tuning coefficients of residual loss, boundary loss during training
+
+## How to measure NTK?
+
+
+Examples: 
+
+1. Why PINN sometimes fails? [@wang2020and]: https://github.com/PredictiveIntelligenceLab/PINNsNTK
+2. Fourier feature [@tancik2020fourier]: https://github.com/tancik/fourier-feature-networks 
+3. 
+
+
+## Examples of NTK
+
+1. Propose a learning structure or loss functio 
+2. Derive the neural tangent kernel (NTK) of the structure.
+3. Use empirical data to monitor the learning speed during the training. 
+
+Examples:
+
+1. @mcclenny2023self: Use NTK to explain the self adaptive weights help training. 
+   ![](https://ars.els-cdn.com/content/image/1-s2.0-S0021999122007859-gr017.jpg)
+2. @tancik2020fourier: Use NTK Fourier spectrum to measure the learning speed of the network on spectrum.
+   ![](img/ntk_fourier.png)
+
+## Related works
+
+### Multi-scale Fourier Neural operator
+
+The multi-scale DNN [@you2024mscalefno] is used for supporting the learning of high frequency component of the image. The resulting multi-scale FNO is used to solve oscillation function [@liu2020multi]. 
+
+- What is the relation between Multi-grid FNO [@guo2024mgfno]?
+
+![MscaleDNN is used.](img/multi-scale_FNO.png)
+
+### Hierarchical multi-scale time stepping for ODE
+
+In @liu2022hierarchical , they propose a multi-scale time stepping for ODE. Instead of using one NN to do time stepping, the NN is trained in large, mid, tiny step sizes, and this can avoid the exploding gradient problem, and the acuumulation of numerical error. Another advantage, is that this approach can parallelize the time stepping process.
+
+![Multi-scale time stepping](https://royalsocietypublishing.org/cms/asset/66a4dbce-f058-4259-9c86-321c5e9c2090/rsta20210200f01.jpg)
+
+
+### Stacked NN and DeepONet 
+
+@howard2023stacked uses stacked NN and Linear transformation to achieve multifidelity learning. This paper uses NTK for weight scheduling.
+
+
+![NN are trained sequentially with transfer learning](img/stacked_dnn1.png)
+
+
+## Questions
+
+1. What is the behavior of MultiScale DNN [@liu2020multi] on residual loss of PDE, does Ritz method a necessary? Is there NTK explaination to backup their design have better convergence rate on high frequency? How many `nx` is needed
+2. 
