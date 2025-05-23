@@ -269,8 +269,10 @@ def main():
     ax = 0.0
     bx = 1.0
     # PDE coeff
-    w = [1, 2, 4, 8, 16] # [1, 2, 4, 8, 16]
-    c = [1, 1, 1, 1, 1]  # [1, 1, 1, 1, 1]
+    h = 16 # highest frequency
+    # w = list(range(1, h + 1))
+    w = list(range(2, h + 1, 2))
+    c = [1] * len(w)
     r = 0
     pde = PDEProb(w=w, c=c, r=r)
     #
