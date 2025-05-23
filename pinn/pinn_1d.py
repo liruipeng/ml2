@@ -1,3 +1,21 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+# ---
+
+# %%
+# jupytext --set-formats ipynb,py pinn_1d.py
+# jupytext --sync pinn_1d.py
+
+# %%
+# Define modules and device
 """
 1D PINN model to solve the problem:
             -u_xx + r*u = f
@@ -13,7 +31,6 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 import matplotlib.pyplot as plt
-import sys
 
 # torch.set_default_dtype(torch.float64)
 
@@ -24,7 +41,8 @@ else:
 
 device = torch.device(dev)
 
-
+# %%
+# Define PDE
 class PDEProb:
     def __init__(self, w=None, c=None, r=0):
         self.w = w if w is not None else [1]
@@ -46,7 +64,8 @@ class PDEProb:
             y += c * torch.sin(w * torch.pi * x)
         return y
 
-
+# %%
+# Define mesh
 class Mesh:
     def __init__(self, ntrain, neval, ax, bx, pde: PDEProb):
         self.ntrain = ntrain
@@ -62,7 +81,8 @@ class Mesh:
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
 
-
+# %%
+# Define the NN structure
 class PINN(nn.Module):
     def __init__(self, dim_inputs, dim_outputs, dim_hidden: list, num_lev,
                  act: nn.Module = nn.ReLU()) -> None:
@@ -120,6 +140,8 @@ class PINN(nn.Module):
     #        torch.nn.init.xavier_uniform(m.weight)  #
 
 
+# %%
+# Define the loss functions
 # "supervised" loss against the analytical solution
 def super_loss(model, mesh:Mesh):
     x = mesh.x_train
@@ -152,7 +174,6 @@ def pinn_loss(model, mesh):
     return loss
 
 
-# Define the loss function for the PINN
 class Loss:
     def __init__(self, model, mesh, t):
         self.model = model
@@ -176,6 +197,7 @@ class Loss:
         return loss
 
 
+# %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -232,7 +254,8 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
     for axis in ax2[:-1]:
         axis.get_xaxis().set_visible(False)
 
-
+# %%
+# Define the main function
 def main():
     torch.manual_seed(0)
     eval_resolution = 256
@@ -272,8 +295,13 @@ def main():
 
     return 0
 
-
+# %%
+# can run it like normal: python filename.py
 if __name__ == "__main__":
     err = main()
     plt.show()
-    sys.exit(err)
+    try:
+        import sys
+        sys.exit(err)
+    except SystemExit:
+        pass  # Prevent traceback in Jupyter or VS Code
