@@ -33,17 +33,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # torch.set_default_dtype(torch.float64)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-if torch.cuda.is_available():
-    dev = "cuda:0"
-else:
-    dev = "cpu"
-
-device = torch.device(dev)
 
 # %%
 # Define PDE
-class PDEProb:
+class PDE:
     def __init__(self, w=None, c=None, r=0):
         self.w = w if w is not None else [1]
         self.c = c if c is not None else [1]
@@ -67,70 +62,89 @@ class PDEProb:
 # %%
 # Define mesh
 class Mesh:
-    def __init__(self, ntrain, neval, ax, bx, pde: PDEProb):
+    def __init__(self, ntrain, neval, ax, bx):
         self.ntrain = ntrain
         self.neval = neval
         self.ax = ax
         self.bx = bx
-        self.pde = pde
         # training sample points (excluding the two points on the boundaries)
         self.x_train = torch.linspace(self.ax, self.bx, self.ntrain, device=device).unsqueeze(-1)
         self.x_eval = torch.linspace(self.ax, self.bx, self.neval, device=device).unsqueeze(-1)
+        self.pde = None
+        self.f = None
+        self.u_ex = None
+
+    def set_pde(self, pde: PDE):
+        self.pde = pde
         # source term
         self.f = pde.f(self.x_train)
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
 
 # %%
-# Define the NN structure
-class PINN(nn.Module):
-    def __init__(self, dim_inputs, dim_outputs, dim_hidden: list, num_lev,
-                 act: nn.Module = nn.ReLU()) -> None:
+# Define one level NN
+class Level(nn.Module):
+    def __init__(self, dim_inputs, dim_outputs, dim_hidden: list,
+                 act: nn.Module = nn.Tanh()) -> None:
         """Simple neural network with linear layers and non-linear activation function
         This class is used as universal function approximate for the solution of
         partial differential equations using PINNs
         """
         super().__init__()
-
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
         # multi-layer MLP
         layer_dim = [dim_inputs] + dim_hidden + [dim_outputs]
-        # the same on each level
-        self.linears = nn.ModuleList()
-        for _ in range(num_lev):
-            self.linears.append(nn.ModuleList([nn.Linear(layer_dim[i], layer_dim[i + 1])
-                                               for i in range(len(layer_dim) - 1)]))
+        self.linear = nn.ModuleList([nn.Linear(layer_dim[i], layer_dim[i + 1])
+                                     for i in range(len(layer_dim) - 1)])
         # activation function
         self.act = act
 
-    def num_levels(self):
-        return len(self.linears)
-
-    def forward_level(self, layers, x: torch.Tensor) -> torch.Tensor:
-        for i, layer in enumerate(layers):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for i, layer in enumerate(self.linear):
             x = layer(x)
             # not applying nonlinear activation in the last layer
-            if i < len(layers) - 1:
+            if i < len(self.linear) - 1:
                 x = self.act(x)
         return x
 
+# %%
+# Define multilevel NN
+class MultiLevelNN(nn.Module):
+    def __init__(self, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
+                 act: nn.Module = nn.ReLU()) -> None:
+        super().__init__()
+        # currently the same model on each level
+        self.models = nn.ModuleList([
+            Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act)
+            for _ in range(num_levels)
+            ])
+        self.dim_inputs = dim_inputs
+        self.dim_outputs = dim_outputs
+
+    def num_levels(self):
+        return len(self.models)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ys = []
-        for _, lvl_layers in enumerate(self.linears):
-            y = self.forward_level(layers=lvl_layers, x=x)
+        for _, lvl in enumerate(self.models):
+            y = lvl.forward(x=x)
             ys.append(y)
         # Concatenate along the column (feature) dimension
         out = torch.cat(ys, dim=1)
-        assert(out.shape[1] == len(self.linears) * self.dim_outputs)
+        assert(out.shape[1] == self.num_levels() * self.dim_outputs)
         return out
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
-        out = torch.zeros((x.shape[0], self.dim_outputs))
-        for i in range(self.num_levels()):
-            out += y[:, i * self.dim_outputs: (i + 1) * self.dim_outputs].to(out.device)
+        y = y.view(-1, self.num_levels(), self.dim_outputs)
+        out = y.sum(dim=1)  # shape: (n, dim_outputs)
         return out
+
+    def freeze_levels(self, freeze_mask: list[bool]):
+        for i, m in enumerate(self.models):
+            for param in m.parameters():
+                param.requires_grad = not freeze_mask[i]
 
     # def _init_weights(self, m):
     #    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -141,45 +155,10 @@ class PINN(nn.Module):
 
 
 # %%
-# Define the loss functions
-# "supervised" loss against the analytical solution
-def super_loss(model, mesh:Mesh):
-    x = mesh.x_train
-    u = model(x)[:, 0].unsqueeze(-1)
-    loss_func = nn.MSELoss()
-    loss = loss_func(u, mesh.u_ex)
-    return loss
-
-
-# "PINN" loss
-def pinn_loss(model, mesh):
-    x = mesh.x_train
-    x_int = x[1:-1].clone().detach().requires_grad_(True)
-    x_bc = torch.vstack([x[0], x[-1]])
-
-    u = model(x_int)[:, 0].unsqueeze(-1)
-    du_dx, = torch.autograd.grad(u, x_int, grad_outputs=torch.ones_like(u), create_graph=True)
-    d2u_dx2, = torch.autograd.grad(du_dx, x_int, grad_outputs=torch.ones_like(du_dx), create_graph=True)
-
-    u_bc = model(x_bc)
-    u_ex_bc = torch.vstack([mesh.u_ex[0], mesh.u_ex[-1]])
-
-    loss_func = nn.MSELoss()
-    pde = mesh.pde
-    loss_i = loss_func(d2u_dx2 + mesh.f[1:-1], pde.r * u)
-    loss_b = loss_func(u_bc, u_ex_bc)
-    loss = loss_i + loss_b
-
-    # print(f"loss {loss:.4e}, loss i {loss_i:.4e}, loss_b {loss_b:.4e}")
-    return loss
-
-
+# Define Loss
 class Loss:
-    def __init__(self, model, mesh, t):
-        self.model = model
-        self.mesh = mesh
-        self.type = t
-
+    def __init__(self, loss_type):
+        self.type = loss_type
         if self.type == -1:
             self.name = "Super Loss"
         elif self.type == 0:
@@ -187,11 +166,41 @@ class Loss:
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
 
-    def loss(self):
+    # "supervised" loss against the analytical solution
+    def super_loss(self, model, mesh):
+        x = mesh.x_train
+        u = model(x)[:, 0].unsqueeze(-1)
+        loss_func = nn.MSELoss()
+        loss = loss_func(u, mesh.u_ex)
+        return loss
+
+    # "PINN" loss
+    def pinn_loss(self, model, mesh):
+        x = mesh.x_train
+        x_int = x[1:-1].clone().detach().requires_grad_(True)
+        x_bc = torch.vstack([x[0], x[-1]])
+
+        u = model(x_int)[:, 0].unsqueeze(-1)
+        du_dx, = torch.autograd.grad(u, x_int, grad_outputs=torch.ones_like(u), create_graph=True)
+        d2u_dx2, = torch.autograd.grad(du_dx, x_int, grad_outputs=torch.ones_like(du_dx), create_graph=True)
+
+        u_bc = model(x_bc)
+        u_ex_bc = torch.vstack([mesh.u_ex[0], mesh.u_ex[-1]])
+
+        loss_func = nn.MSELoss()
+        pde = mesh.pde
+        loss_i = loss_func(d2u_dx2 + mesh.f[1:-1], pde.r * u)
+        loss_b = loss_func(u_bc, u_ex_bc)
+        loss = loss_i + loss_b
+
+        # print(f"loss {loss:.4e}, loss i {loss_i:.4e}, loss_b {loss_b:.4e}")
+        return loss
+
+    def loss(self, model, mesh):
         if self.type == -1:
-            loss = super_loss(model=self.model, mesh=self.mesh)
+            loss = self.super_loss(model=model, mesh=mesh)
         elif self.type == 0:
-            loss = pinn_loss(model=self.model, mesh=self.mesh)
+            loss = self.pinn_loss(model=model, mesh=mesh)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss
@@ -217,7 +226,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
         # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
         optimizer.zero_grad()
         # compute the loss value for the current batch of data
-        loss = criterion.loss()
+        loss = criterion.loss(model=model, mesh=mesh)
         # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
         # for every parameter x which has requires_grad=True.
         loss.backward()
@@ -274,22 +283,22 @@ def main():
     w = list(range(2, h + 1, 2))
     c = [1] * len(w)
     r = 0
-    pde = PDEProb(w=w, c=c, r=r)
+    pde = PDE(w=w, c=c, r=r)
     #
+    dim_inputs = 1
     dim_outputs = 1
     loss_type = 0
     # ** RELU does NOT work! **
     act = nn.Tanh() # SiLU, Tanh, SoftPlus, GELU
-    #
-    mesh = Mesh(ntrain=nx, neval=eval_resolution, ax=ax, bx=bx, pde=pde)
-    # Create an instance of the PINN model
-    model = PINN(dim_inputs=1, dim_outputs=dim_outputs, dim_hidden=[64, 64], num_lev=1, act=act)
+    # 1-D mesh
+    mesh = Mesh(ntrain=nx, neval=eval_resolution, ax=ax, bx=bx)
+    mesh.set_pde(pde=pde)
+    # Create an instance of multilevel model
+    model = MultiLevelNN(num_levels=1, dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=[64, 64], act=act)
     print(model)
     model.to(device)
-    # Exact solution
-    # u_analytic = u_ex(mesh.x_eval)
     # Train the PINN model
-    loss = Loss(mesh=mesh, model=model, t=loss_type)
+    loss = Loss(loss_type=loss_type)
     print(f"Using loss: {loss.name}")
     #
     train(model=model, mesh=mesh, criterion=loss, iterations=iterations, learning_rate=1e-3,
