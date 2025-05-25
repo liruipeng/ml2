@@ -31,10 +31,10 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 import matplotlib.pyplot as plt
+from enum import Enum
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 # %%
 # Define PDE
@@ -109,6 +109,13 @@ class Level(nn.Module):
         return x
 
 # %%
+# Define level status
+class LevelStatus(Enum):
+    OFF = "off"
+    TRAIN = "train"
+    FROZEN = "frozen"
+
+# %%
 # Define multilevel NN
 class MultiLevelNN(nn.Module):
     def __init__(self, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
@@ -122,29 +129,62 @@ class MultiLevelNN(nn.Module):
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
 
+        # All levels start as "off"
+        self.level_status = [LevelStatus.OFF] * num_levels
+
+        # No gradients are tracked initially
+        for model in self.models:
+            for param in model.parameters():
+                param.requires_grad = False
+
+    def set_status(self, level_idx: int, status: LevelStatus):
+        assert isinstance(status, LevelStatus), f"Invalid status: {status}"
+        if level_idx < 0 or level_idx >= self.num_levels():
+            raise IndexError(f"Level index {level_idx} is out of range")
+        self.level_status[level_idx] = status
+        requires_grad = status == LevelStatus.TRAIN
+        for param in self.models[level_idx].parameters():
+            param.requires_grad = requires_grad
+
+    def set_all_status(self, status_list: list[LevelStatus]):
+        assert len(status_list) == len(self.models), "Length mismatch in status list"
+        for i, status in enumerate(status_list):
+            self.set_status(i, status)
+
+    def print_status(self):
+        for i, status in enumerate(self.level_status):
+            print(f"Level {i}: {status.name}")
+
     def num_levels(self):
         return len(self.models)
 
+    def num_active_levels(self) -> int:
+        """Returns the number of levels currently active (train or frozen)"""
+        return sum(status != LevelStatus.OFF for status in self.level_status)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ys = []
-        for _, lvl in enumerate(self.models):
-            y = lvl.forward(x=x)
-            ys.append(y)
+        for i, model in enumerate(self.models):
+            if self.level_status[i] != LevelStatus.OFF:
+                y = model.forward(x=x)
+                ys.append(y)
+        if not ys:
+            # No active levels, return zeros with correct shape
+            return torch.zeros((x.shape[0], self.dim_outputs), device=x.device)
         # Concatenate along the column (feature) dimension
         out = torch.cat(ys, dim=1)
-        assert(out.shape[1] == self.num_levels() * self.dim_outputs)
+        assert(out.shape[1] == self.num_active_levels() * self.dim_outputs)
         return out
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
-        y = y.view(-1, self.num_levels(), self.dim_outputs)
-        out = y.sum(dim=1)  # shape: (n, dim_outputs)
-        return out
-
-    def freeze_levels(self, freeze_mask: list[bool]):
-        for i, m in enumerate(self.models):
-            for param in m.parameters():
-                param.requires_grad = not freeze_mask[i]
+        n_active = self.num_active_levels()
+        # reshape to [batch_size, num_levels, dim_outputs]
+        # and sum over levels
+        if n_active > 1:
+            y = y.view(-1, n_active, self.dim_outputs)
+            return y.sum(dim=1)  # shape: (n, dim_outputs)
+        return y
 
     # def _init_weights(self, m):
     #    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -157,7 +197,8 @@ class MultiLevelNN(nn.Module):
 # %%
 # Define Loss
 class Loss:
-    def __init__(self, loss_type):
+    def __init__(self, loss_type, loss_func=nn.MSELoss()):
+        self.loss_func = loss_func
         self.type = loss_type
         if self.type == -1:
             self.name = "Super Loss"
@@ -167,29 +208,27 @@ class Loss:
             raise ValueError(f"Unknown loss type: {self.type}")
 
     # "supervised" loss against the analytical solution
-    def super_loss(self, model, mesh):
+    def super_loss(self, model, mesh, loss_func):
         x = mesh.x_train
-        u = model(x)[:, 0].unsqueeze(-1)
-        loss_func = nn.MSELoss()
+        u = model.get_solution(x)
         loss = loss_func(u, mesh.u_ex)
         return loss
 
     # "PINN" loss
-    def pinn_loss(self, model, mesh):
-        x = mesh.x_train
-        x_int = x[1:-1].clone().detach().requires_grad_(True)
-        x_bc = torch.vstack([x[0], x[-1]])
+    def pinn_loss(self, model, mesh, loss_func):
+        x = mesh.x_train.clone().detach().requires_grad_(True)
+        u = model.get_solution(x)
 
-        u = model(x_int)[:, 0].unsqueeze(-1)
-        du_dx, = torch.autograd.grad(u, x_int, grad_outputs=torch.ones_like(u), create_graph=True)
-        d2u_dx2, = torch.autograd.grad(du_dx, x_int, grad_outputs=torch.ones_like(du_dx), create_graph=True)
+        du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
+        d2u_dx2, = torch.autograd.grad(du_dx, x, grad_outputs=torch.ones_like(du_dx), create_graph=True)
 
-        u_bc = model(x_bc)
-        u_ex_bc = torch.vstack([mesh.u_ex[0], mesh.u_ex[-1]])
+        u_int = u[1:-1]
+        u_bc = u[[0, -1]]
+        u_ex_bc = mesh.u_ex[[0, -1]]
 
-        loss_func = nn.MSELoss()
+        # Losses
         pde = mesh.pde
-        loss_i = loss_func(d2u_dx2 + mesh.f[1:-1], pde.r * u)
+        loss_i = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u_int)
         loss_b = loss_func(u_bc, u_ex_bc)
         loss = loss_i + loss_b
 
@@ -198,9 +237,9 @@ class Loss:
 
     def loss(self, model, mesh):
         if self.type == -1:
-            loss = self.super_loss(model=model, mesh=mesh)
+            loss = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
-            loss = self.pinn_loss(model=model, mesh=mesh)
+            loss = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss
@@ -208,13 +247,21 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots):
+def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots, level_idx=None):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = StepLR(optimizer, step_size=5000, gamma=0.1)
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots
     fig, ax = plt.subplots(num_plots + 1)
     fig2, ax2 = plt.subplots(num_plots)
+
+    if level_idx is not None:
+        fig.suptitle(f"Level {level_idx} Outputs")
+        fig2.suptitle(f"Level {level_idx} Errors")
+    else:
+        fig.suptitle("Model Outputs")
+        fig2.suptitle("Error Plots")
+
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
@@ -262,6 +309,8 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
         axis.get_xaxis().set_visible(False)
     for axis in ax2[:-1]:
         axis.get_xaxis().set_visible(False)
+    fig.tight_layout()
+    fig2.tight_layout()
 
 # %%
 # Define the main function
@@ -278,31 +327,44 @@ def main():
     ax = 0.0
     bx = 1.0
     # PDE coeff
-    h = 16 # highest frequency
+    h = 8 # highest frequency
     # w = list(range(1, h + 1))
     w = list(range(2, h + 1, 2))
     c = [1] * len(w)
     r = 0
     pde = PDE(w=w, c=c, r=r)
-    #
+    # input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
+    # loss function [supervised with analytical solution (-1) or PDE loss (0)]
     loss_type = 0
+    loss = Loss(loss_type=loss_type)
+    print(f"Using loss: {loss.name}")
+    # number of levels
+    num_levels = 3
+
     # ** RELU does NOT work! **
     act = nn.Tanh() # SiLU, Tanh, SoftPlus, GELU
     # 1-D mesh
     mesh = Mesh(ntrain=nx, neval=eval_resolution, ax=ax, bx=bx)
     mesh.set_pde(pde=pde)
     # Create an instance of multilevel model
-    model = MultiLevelNN(num_levels=1, dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=[64, 64], act=act)
+    model = MultiLevelNN(num_levels=num_levels, dim_inputs=dim_inputs, dim_outputs=dim_outputs,
+                         dim_hidden=[64, 64], act=act)
     print(model)
     model.to(device)
-    # Train the PINN model
-    loss = Loss(loss_type=loss_type)
-    print(f"Using loss: {loss.name}")
-    #
-    train(model=model, mesh=mesh, criterion=loss, iterations=iterations, learning_rate=1e-3,
-          num_check=num_check, num_plots=num_plots)
+    # Train the model
+    for l in range(num_levels):
+        # Turn level l-1 to "frozen"
+        if l > 0:
+            model.set_status(level_idx=l-1, status=LevelStatus.FROZEN)
+        # Turn level l to "train"
+        model.set_status(level_idx=l, status=LevelStatus.TRAIN)
+        print("\nTraining Level", l)
+        model.print_status()
+        #
+        train(model=model, mesh=mesh, criterion=loss, iterations=iterations, learning_rate=1e-3,
+            num_check=num_check, num_plots=num_plots, level_idx=l)
 
     return 0
 
