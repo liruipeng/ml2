@@ -137,6 +137,9 @@ class MultiLevelNN(nn.Module):
             for param in model.parameters():
                 param.requires_grad = False
 
+        # Scale factor
+        self.scales = [1.0] * num_levels
+
     def set_status(self, level_idx: int, status: LevelStatus):
         assert isinstance(status, LevelStatus), f"Invalid status: {status}"
         if level_idx < 0 or level_idx >= self.num_levels():
@@ -162,11 +165,22 @@ class MultiLevelNN(nn.Module):
         """Returns the number of levels currently active (train or frozen)"""
         return sum(status != LevelStatus.OFF for status in self.level_status)
 
+    def set_scale(self, level_idx: int, scale: float):
+        if level_idx < 0 or level_idx >= self.num_levels():
+            raise IndexError(f"Level index {level_idx} is out of range")
+        self.scales[level_idx] = scale
+
+    def set_all_scales(self, scale_list: list[float]):
+        assert len(scale_list) == len(self.models), "Length mismatch in scales"
+        for i, scale in enumerate(scale_list):
+            self.set_scale(i, scale)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ys = []
         for i, model in enumerate(self.models):
             if self.level_status[i] != LevelStatus.OFF:
-                y = model.forward(x=x)
+                x_scale = self.scales[i] * x
+                y = model.forward(x=x_scale)
                 ys.append(y)
         if not ys:
             # No active levels, return zeros with correct shape
@@ -247,26 +261,17 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots, level_idx=None):
+def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots, axs1, axs2, level_idx):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = StepLR(optimizer, step_size=5000, gamma=0.1)
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots
-    fig, ax = plt.subplots(num_plots + 1)
-    fig2, ax2 = plt.subplots(num_plots)
-
-    if level_idx is not None:
-        fig.suptitle(f"Level {level_idx} Outputs")
-        fig2.suptitle(f"Level {level_idx} Errors")
-    else:
-        fig.suptitle("Model Outputs")
-        fig2.suptitle("Error Plots")
 
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
-    ax[0].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black")
-    ax[-1].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black", alpha=0.5)
+    axs1[0, level_idx].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black")
+    axs1[-1, level_idx].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black", alpha=0.5)
     ax_i = 1
 
     for i in range(iterations):
@@ -299,18 +304,11 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
                 # plot
-                ax[ax_i].scatter(to_np(mesh.x_train), to_np(u_train), color="red", label="Sample training points")
-                ax[ax_i].plot(to_np(mesh.x_eval), to_np(u_eval), linestyle='-', marker=',', alpha=0.5)
-                ax2[ax_i - 1].plot(to_np(mesh.x_eval), to_np(error))
+                axs1[ax_i, level_idx].scatter(to_np(mesh.x_train), to_np(u_train), color="red", label="Sample training points")
+                axs1[ax_i, level_idx].plot(to_np(mesh.x_eval), to_np(u_eval), linestyle='-', marker=',', alpha=0.5)
+                axs2[ax_i - 1, level_idx].plot(to_np(mesh.x_eval), to_np(error))
                 ax_i += 1
             model.train()
-
-    for axis in ax[:-1]:
-        axis.get_xaxis().set_visible(False)
-    for axis in ax2[:-1]:
-        axis.get_xaxis().set_visible(False)
-    fig.tight_layout()
-    fig2.tight_layout()
 
 # %%
 # Define the main function
@@ -327,9 +325,11 @@ def main():
     ax = 0.0
     bx = 1.0
     # PDE coeff
-    h = 8 # highest frequency
+    h = 32 # highest frequency
+    w = [h]
     # w = list(range(1, h + 1))
-    w = list(range(2, h + 1, 2))
+    # w = list(range(2, h + 1, 2))
+    # w = [2**i for i in range(h.bit_length()) if 2**i <= h]
     c = [1] * len(w)
     r = 0
     pde = PDE(w=w, c=c, r=r)
@@ -341,7 +341,7 @@ def main():
     loss = Loss(loss_type=loss_type)
     print(f"Using loss: {loss.name}")
     # number of levels
-    num_levels = 3
+    num_levels = 2
 
     # ** RELU does NOT work! **
     act = nn.Tanh() # SiLU, Tanh, SoftPlus, GELU
@@ -353,6 +353,13 @@ def main():
                          dim_hidden=[64, 64], act=act)
     print(model)
     model.to(device)
+    # Plotting
+    fig1, axs1 = plt.subplots(num_plots + 1, num_levels)
+    axs1 = axs1.reshape(num_plots + 1, num_levels)
+    fig2, axs2 = plt.subplots(num_plots, num_levels)
+    axs2 = axs2.reshape(num_plots, num_levels)
+    fig1.suptitle("Model Outputs")
+    fig2.suptitle("Error Plots")
     # Train the model
     for l in range(num_levels):
         # Turn level l-1 to "frozen"
@@ -362,9 +369,23 @@ def main():
         model.set_status(level_idx=l, status=LevelStatus.TRAIN)
         print("\nTraining Level", l)
         model.print_status()
-        #
+        # set scale
+        if l == 0:
+            model.set_scale(level_idx=l, scale=1.0)
+        else:
+            model.set_scale(level_idx=l, scale=32.0)
+        # Crank that !@#$ up
         train(model=model, mesh=mesh, criterion=loss, iterations=iterations, learning_rate=1e-3,
-            num_check=num_check, num_plots=num_plots, level_idx=l)
+              num_check=num_check, num_plots=num_plots, axs1=axs1, axs2=axs2, level_idx=l)
+    # Plotting
+    for axis_row in axs1[:-1]:
+        for axis in axis_row:
+            axis.get_xaxis().set_visible(False)
+    for axis_row in axs2[:-1]:
+        for axis in axis_row:
+            axis.get_xaxis().set_visible(False)
+    fig1.tight_layout()
+    fig2.tight_layout()
 
     return 0
 
