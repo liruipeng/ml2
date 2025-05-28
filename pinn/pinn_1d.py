@@ -10,12 +10,15 @@
 #       jupytext_version: 1.17.1
 # ---
 
-# %%
+# %% [markdown]
+# ```
 # jupytext --set-formats ipynb,py pinn_1d.py
 # jupytext --sync pinn_1d.py
+# jupytext --sync pinn_1d.ipynb
+# ```
 
 # %% [markdown]
-# 1D model to solve the problem:
+# ### 1D PDE problem:
 #
 # $-u_{xx} + \gamma u = f$
 #
@@ -55,11 +58,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Define PDE
 class PDE:
-    def __init__(self, w=None, c=None, mu=70, r=0):
+    def __init__(self, w=None, c=None, mu=70, r=0, problem=1):
         self.w = w if w is not None else [1]
         self.c = c if c is not None else [1]
         self.mu = mu
         self.r = r
+        if problem == 1:
+            self.f = self.f_1
+            self.u_ex = self.u_ex_1
+        else:
+            self.f = self.f_2
+            self.u_ex = self.u_ex_2
 
     # Source term
     def f_1(self, x):
@@ -85,12 +94,6 @@ class PDE:
 
     def u_ex_2(self, x):
         return torch.exp(-x**2) * torch.sin(self.mu * x ** 2)
-
-    def f(self, x):
-        return self.f_1(x)
-
-    def u_ex(self, x):
-        return self.u_ex_1(x)
 
 # %%
 # Define mesh
@@ -289,12 +292,12 @@ class Loss:
 
     def loss(self, model, mesh):
         if self.type == -1:
-            loss = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+            loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
-            loss = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+            loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
-        return loss
+        return loss_value
 
 
 # %%
@@ -374,7 +377,8 @@ def main():
     # w = [2**i for i in range(h.bit_length()) if 2**i <= h]
     c = [1] * len(w)
     r = 0
-    pde = PDE(w=w, c=c, r=r)
+    pde = PDE(w=w, c=c, mu=70, r=r, problem=1)
+
     # input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
