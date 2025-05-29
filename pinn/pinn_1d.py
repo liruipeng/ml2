@@ -81,7 +81,9 @@ class PDE:
     def f_2(self, x):
         sinux = torch.sin(self.mu * x**2)
         cosux = torch.cos(self.mu * x**2)
-        return self.r*sinux + 4*self.mu**2 * x**2 * sinux + 8 * self.mu * x**2 * cosux - 2 * self.mu * cosux - 4 * x**2 * sinux + 2 * sinux
+        f = self.r*sinux + 4*self.mu**2 * x**2 * sinux + 8 * self.mu * x**2 * cosux - 2 * self.mu * cosux - 4 * x**2 * sinux + 2 * sinux
+        f = f * torch.exp(-x**2)
+        return f
 
     # Analytical solution
     def u_ex_1(self, x):
