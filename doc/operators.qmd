@@ -1,0 +1,15 @@
+---
+title: "Selected Operator learning Frameworks"
+author: "Steven Chiu (chiu26@llnl.gov)"
+---
+
+
+## Operator learning
+
+
+- One major challenge of operator learning is how to represent a function, which is an infinite dimensional space. 
+- **discretization invariant** operator learning is to learn a function that is invariant to the resolution of the input data.
+- **Irregular mesh** operator learning is to learn a function that is invariant to the resolution of the input data, and also invariant to the mesh structure of the input data.
+
+- Basis Operator Network: 
+

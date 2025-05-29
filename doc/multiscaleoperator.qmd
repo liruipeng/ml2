@@ -1,0 +1,17 @@
+---
+title: "Multiscale Operator"
+author: "Steven Chiu"
+---
+# Ideas for Multiscale Operator
+
+
+Important papers:
+
+- Basis Operator Network [@hua2023basis]
+- Multi-scale DNN [@cai2019multi]
+
+
+## Function Encoder
+
+
+![]()
