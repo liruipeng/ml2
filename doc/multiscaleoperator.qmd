@@ -1,17 +1,67 @@
 ---
 title: "Multiscale Operator"
 author: "Steven Chiu"
+bibliography: "ref.bib"
 ---
+
+The complete idea is elaborated on [Teams-ML2](https://teams.microsoft.com/l/message/19:nWhydcqAbh-0e26Qa0QK_SWvl7LDr9ZakvzHOA_kEnU1@thread.tacv2/1748557980748?tenantId=a722dec9-ae4e-4ae3-9d75-fd66e2680a63&groupId=48397e69-b3b0-4894-a7ef-09a88d862b21&parentMessageId=1748557980748&teamName=IL-LDRD%20MultiLevel%20Machine%20Learning%20(ML%5E2)&channelName=ML%5E2&createdTime=1748557980748).
+
 # Ideas for Multiscale Operator
 
 
 Important papers:
 
 - Basis Operator Network [@hua2023basis]
+- Convolutional Neural Operator [@raonic2023convolutional]
+
+and 
+
 - Multi-scale DNN [@cai2019multi]
 
 
 ## Function Encoder
 
+Proposed by @hua2023basis, function encoder approximate a function with neural basis. It is invariant to the resolution of sensor grids.  
 
-![]()
+- **Neural Basis Decomposition**: Suppose $u$ is the function we want to approximate, and given a set of basis function $\{\phi_i(x): \mathbb{R}^d \to \mathbb{R}^1| i=1,\dots, N\}$. Suppose $N$ is large enough, we can approximate $u$ as
+$$
+u \approx \sum_{i=1}^{N} \langle u , \phi_i \rangle \phi_i
+$$
+where $\langle u, \phi_i\rangle := \int_D u(x) \phi_i (x) dx$. (proof of convergence on $N$ is in @hua2023basis.).
+    - Suppose we have a function $u$ with uniform discretization $x_1, \dots, x_{n_1}$ and $u(x_1), \dots, u(x_{n_1})$
+    - **Encoding**: $x \in \mathbb{R}^d \to \phi_i(x) \in \mathbb{R}^1$ for $i=1,\dots, N$, and get $\langle u, \phi_i\rangle =  \int_D u(x) \phi_i (x) dx$ with trapezoidal rule.
+    - **Decoding**: $u \approx \sum_{i=1}^{N} \langle u , \phi_i \rangle \phi_i$
+
+- **Orthogonal by Training**: To make $\{\phi_1, \dots, \phi_{N_1}\}$ orthonormal, they use loss function $l(\mathcal{R}_\phi \circ \mathcal{P}_\phi, ID)$ during training to induce orthogonal bias.  (The notation is missing in @hua2023basis)
+
+
+- **Resolution invariance**: This structure is resolution-invariance because the inner product is invariant to the number of $x$ grids. 
+
+
+
+![Comparison of autoencoder and function autoencoder](img/function_encoder.png) 
+
+![](img/basisonet.png)
+
+
+## Idea
+
+- Function autoencoder can have frequncy bias just like regular MLP
+
+
+apply MscaleDNN to $\phi$
+
+![](img/mscalednn.png)
+
+
+
+# Convolutional Neural Operator
+
+A Neural Operator composed by Convolutaional layer and UNet structure for multiscale sampling [@raonic2023convolutional]. 
+
+![](img/CNO.png)
+
+- The activation function need to be properly setup. ReLU tend to create high frequency features, that create aliasing error. 
+- There can be a modification on multiscale NN concept to 
+  - Channel encoding with $x, 2x, \dots, nx$
+  - Custom design of activation function based on frequency response.
