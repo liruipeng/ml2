@@ -368,7 +368,6 @@ def main(args=None):
     # Parse args
     args = parse_args(args=args)
     print_args(args=args)
-    breakpoint()
     # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
