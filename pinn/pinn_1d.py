@@ -8,6 +8,10 @@
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.17.1
+#   kernelspec:
+#     display_name: pymfem
+#     language: python
+#     name: python3
 # ---
 
 # %% [markdown]
@@ -44,13 +48,14 @@
 
 # %%
 # Define modules and device
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
-import matplotlib.pyplot as plt
 from enum import Enum
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -58,9 +63,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Define PDE
 class PDE:
-    def __init__(self, w=None, c=None, mu=70, r=0, problem=1):
-        self.w = w if w is not None else [1]
-        self.c = c if c is not None else [1]
+    def __init__(self, high=None, mu=70, r=0, problem=1):
+        omega = [high]
+        # w = list(range(1, high + 1))
+        # w = list(range(2, high + 1, 2))
+        # w = [2**i for i in range(high.bit_length()) if 2**i <= high]
+        coeff = [1] * len(omega)
+
+        self.w = omega
+        self.c = coeff
         self.mu = mu
         self.r = r
         if problem == 1:
@@ -262,7 +273,7 @@ class Loss:
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
 
-    # "supervised" loss against the analytical solution
+    # "Supervised" loss against the analytical solution
     def super_loss(self, model, mesh, loss_func):
         x = mesh.x_train
         u = model.get_solution(x)
@@ -281,13 +292,12 @@ class Loss:
         u_bc = u[[0, -1]]
         u_ex_bc = mesh.u_ex[[0, -1]]
 
-        # Losses
+        # Total loss: internal + boundary
         pde = mesh.pde
         loss_i = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u_int)
         loss_b = loss_func(u_bc, u_ex_bc)
         loss = loss_i + loss_b
 
-        # print(f"loss {loss:.4e}, loss i {loss_i:.4e}, loss_b {loss_b:.4e}")
         return loss
 
     def loss(self, model, mesh):
@@ -302,19 +312,16 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots, axs1, axs2, level_idx, plot=False):
+def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots,
+          sweep_idx, level_idx, frame_dir):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = StepLR(optimizer, step_size=5000, gamma=0.1)
     check_freq = (iterations + num_check - 1) // num_check
-    plot_freq = (iterations + num_plots - 1) // num_plots
+    plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
-    if plot:
-        axs1[0, level_idx].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black")
-        axs1[-1, level_idx].plot(to_np(mesh.x_eval), to_np(u_analytic), linestyle='-', color="black", alpha=0.5)
-    ax_i = 1
 
     for i in range(iterations):
         # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
@@ -339,86 +346,61 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                       f"inf-norm: {torch.max(torch.abs(error)):.4e}")
             model.train()
 
-        if np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1:
+        if plot_freq > 0 and (np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1):
             model.eval()
             with torch.no_grad():
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
-                error = u_analytic - u_eval.to(u_analytic.device)
-                # plot
-                if plot:
-                    axs1[ax_i, level_idx].scatter(to_np(mesh.x_train), to_np(u_train), color="red", label="Sample training points")
-                    axs1[ax_i, level_idx].plot(to_np(mesh.x_eval), to_np(u_eval), linestyle='-', marker=',', alpha=0.5)
-                    axs2[ax_i - 1, level_idx].plot(to_np(mesh.x_eval), to_np(error))
-                ax_i += 1
+                # error = u_analytic - u_eval.to(u_analytic.device)
+                save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
+                           xs=to_np(mesh.x_train), ys=to_np(u_train),
+                           iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
+                save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
+                           xs=None, ys=None,
+                           iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
             model.train()
 
 # %%
 # Define the main function
-def main():
+def main(args=None):
+    # For reproducibility
     torch.manual_seed(0)
-    eval_resolution = 256
-    # Generate training data
-    # number of point for training
-    plot = False
-    nx = 128
-    num_check = 20
-    num_plots = 4
-    iterations = 2000
-    sweeps = 10
-    # Domain is interval [ax, bx] along the x-axis
-    ax = 0
-    bx = 1.0
-    # PDE coeff
-    h = 16 # highest frequency
-    w = [h]
-    # w = list(range(1, h + 1))
-    # w = list(range(2, h + 1, 2))
-    # w = [2**i for i in range(h.bit_length()) if 2**i <= h]
-    c = [1] * len(w)
-    r = 0
-    pde = PDE(w=w, c=c, mu=70, r=r, problem=1)
-
-    # input and output dimension: x -> u(x)
-    dim_inputs = 1
-    dim_outputs = 1
-    # loss function [supervised with analytical solution (-1) or PDE loss (0)]
-    loss_type = 0
-    loss = Loss(loss_type=loss_type)
+    # Parse args
+    args = parse_args(args=args)
+    print_args(args=args)
+    breakpoint()
+    # PDE
+    pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
+              problem=args.problem_id)
+    # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
+    loss = Loss(loss_type=args.loss_type)
     print(f"Using loss: {loss.name}")
-    # number of levels
-    num_levels = 4
-
-    # ** RELU does NOT work! **
-    act = nn.Tanh() # SiLU, Tanh, SoftPlus, GELU
     # 1-D mesh
-    mesh = Mesh(ntrain=nx, neval=eval_resolution, ax=ax, bx=bx)
+    mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
     # Create an instance of multilevel model
-    model = MultiLevelNN(num_levels=num_levels, dim_inputs=dim_inputs, dim_outputs=dim_outputs,
-                         dim_hidden=[64, 64], act=act)
+    # Input and output dimension: x -> u(x)
+    dim_inputs = 1
+    dim_outputs = 1
+    model = MultiLevelNN(num_levels=args.levels,
+                         dim_inputs=dim_inputs, dim_outputs=dim_outputs,
+                         dim_hidden=args.hidden_dims,
+                         act=get_activation(args.activation))
     print(model)
     model.to(device)
+    # Plotting
+    frame_dir = "./frames"
+    os.makedirs(frame_dir, exist_ok=True)
+    if args.clear:
+        cleanfiles(frame_dir)
+    num_plots = args.num_plots if args.plot else 0
     # Train the model
-    for i in range(sweeps):
+    for i in range(args.sweeps):
         print("\nTraining Sweep", i)
-        # Plotting
-        if i == sweeps - 1:
-            plot = True
-        if plot:
-            fig1, axs1 = plt.subplots(num_plots + 1, num_levels)
-            axs1 = axs1.reshape(num_plots + 1, num_levels)
-            fig2, axs2 = plt.subplots(num_plots, num_levels)
-            axs2 = axs2.reshape(num_plots, num_levels)
-            fig1.suptitle("Model Outputs")
-            fig2.suptitle("Error Plots")
-        else:
-            axs1 = None
-            axs2 = None
         # train each level at a time
-        for l in range(num_levels):
+        for l in range(args.levels):
             # Turn all levels to "frozen" if they are not off
-            for k in range(num_levels):
+            for k in range(args.levels):
                 if model.get_status(level_idx=k) != LevelStatus.OFF:
                     model.set_status(level_idx=k, status=LevelStatus.FROZEN)
             # Turn level l to "train"
@@ -429,26 +411,24 @@ def main():
             scale = l + 1
             model.set_scale(level_idx=l, scale=scale)
             # Crank that !@#$ up
-            train(model=model, mesh=mesh, criterion=loss, iterations=iterations, learning_rate=1e-3,
-                  num_check=num_check, num_plots=num_plots, axs1=axs1, axs2=axs2, level_idx=l, plot=plot)
-        # Plotting
-        if plot:
-            for axis_row in axs1[:-1]:
-                for axis in axis_row:
-                    axis.get_xaxis().set_visible(False)
-            for axis_row in axs2[:-1]:
-                for axis in axis_row:
-                    axis.get_xaxis().set_visible(False)
-            fig1.tight_layout()
-            fig2.tight_layout()
-
+            train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
+                  learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
+                  sweep_idx=i, level_idx=l, frame_dir=frame_dir)
+    # Turn PNGs into a video using OpenCV
+    if args.plot:
+        make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
+                               output_file="Solution.mp4")
+        make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Errors",
+                               output_file="Errors.mp4")
     return 0
 
 # %%
 # can run it like normal: python filename.py
 if __name__ == "__main__":
-    err = main()
-    plt.show()
+    if is_notebook():
+        err = main(['--levels', '4', '--epochs', '500', '--sweeps', '1', '--plot'])
+    else:
+        err = main()
     try:
         import sys
         sys.exit(err)
