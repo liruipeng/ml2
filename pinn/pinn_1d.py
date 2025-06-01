@@ -64,10 +64,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Define PDE
 class PDE:
     def __init__(self, high=None, mu=70, r=0, problem=1):
-        omega = [high]
-        # w = list(range(1, high + 1))
-        # w = list(range(2, high + 1, 2))
-        # w = [2**i for i in range(high.bit_length()) if 2**i <= high]
+        # omega = [high]
+        omega = list(range(1, high + 1))
+        # omega = list(range(2, high + 1, 2))
+        # omega = [2**i for i in range(high.bit_length()) if 2**i <= high]
         coeff = [1] * len(omega)
 
         self.w = omega
@@ -165,9 +165,10 @@ class LevelStatus(Enum):
 # %%
 # Define multilevel NN
 class MultiLevelNN(nn.Module):
-    def __init__(self, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
-                 act: nn.Module = nn.ReLU()) -> None:
+    def __init__(self, mesh: Mesh, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
+                 act: nn.Module = nn.ReLU(), enforce_bc: bool = False) -> None:
         super().__init__()
+        self.mesh = mesh
         # currently the same model on each level
         self.models = nn.ModuleList([
             Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act)
@@ -175,6 +176,7 @@ class MultiLevelNN(nn.Module):
             ])
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
+        self.enforce_bc = enforce_bc
 
         # All levels start as "off"
         self.level_status = [LevelStatus.OFF] * num_levels
@@ -249,7 +251,13 @@ class MultiLevelNN(nn.Module):
         # and sum over levels
         if n_active > 1:
             y = y.view(-1, n_active, self.dim_outputs)
-            return y.sum(dim=1)  # shape: (n, dim_outputs)
+            y = y.sum(dim=1)  # shape: (n, dim_outputs)
+        #
+        if self.enforce_bc:
+            g0 = self.mesh.u_ex[0].item()
+            g1 = self.mesh.u_ex[-1].item()
+            # y = g0 * (1 - x) + g1 * x + x * (1 - x) * y
+            y = g0 * (1 - x) + g1 * x + (1 - torch.exp(x)) * (1 - torch.exp(x-1)) * y
         return y
 
     # def _init_weights(self, m):
@@ -263,7 +271,7 @@ class MultiLevelNN(nn.Module):
 # %%
 # Define Loss
 class Loss:
-    def __init__(self, loss_type, loss_func=nn.MSELoss()):
+    def __init__(self, loss_type, loss_func=nn.MSELoss(), bc_weight=1.0):
         self.loss_func = loss_func
         self.type = loss_type
         if self.type == -1:
@@ -272,6 +280,7 @@ class Loss:
             self.name = "PINN Loss"
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
+        self.bc_weight = bc_weight
 
     # "Supervised" loss against the analytical solution
     def super_loss(self, model, mesh, loss_func):
@@ -288,15 +297,15 @@ class Loss:
         du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
         d2u_dx2, = torch.autograd.grad(du_dx, x, grad_outputs=torch.ones_like(du_dx), create_graph=True)
 
-        u_int = u[1:-1]
-        u_bc = u[[0, -1]]
-        u_ex_bc = mesh.u_ex[[0, -1]]
-
-        # Total loss: internal + boundary
+        # Internal loss
         pde = mesh.pde
-        loss_i = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u_int)
-        loss_b = loss_func(u_bc, u_ex_bc)
-        loss = loss_i + loss_b
+        loss = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
+        # Boundary loss
+        if not model.enforce_bc:
+            u_bc = u[[0, -1]]
+            u_ex_bc = mesh.u_ex[[0, -1]]
+            loss_b = loss_func(u_bc, u_ex_bc)
+            loss += self.bc_weight * loss_b
 
         return loss
 
@@ -351,7 +360,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
             with torch.no_grad():
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
-                # error = u_analytic - u_eval.to(u_analytic.device)
+                error = u_analytic - u_eval.to(u_analytic.device)
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
                            iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
@@ -372,7 +381,7 @@ def main(args=None):
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
     # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
-    loss = Loss(loss_type=args.loss_type)
+    loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
     print(f"Using loss: {loss.name}")
     # 1-D mesh
     mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
@@ -381,10 +390,12 @@ def main(args=None):
     # Input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
-    model = MultiLevelNN(num_levels=args.levels,
+    model = MultiLevelNN(mesh=mesh,
+                         num_levels=args.levels,
                          dim_inputs=dim_inputs, dim_outputs=dim_outputs,
                          dim_hidden=args.hidden_dims,
-                         act=get_activation(args.activation))
+                         act=get_activation(args.activation),
+                         enforce_bc=args.enforce_bc)
     print(model)
     model.to(device)
     # Plotting

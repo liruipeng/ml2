@@ -13,8 +13,8 @@ def cleanfiles(dir_name):
         for item in dir_path.iterdir():
             if item.is_file():
                 item.unlink()
-            elif item.is_dir():
-                shutil.rmtree(item)
+            # elif item.is_dir():
+            #    shutil.rmtree(item)
 
 def is_notebook():
     try:
@@ -36,7 +36,7 @@ def parse_args(args=None):
                         help="Number of plotting points during training.")
     parser.add_argument('--epochs', type=int, default=10000,
                         help="Number of training epochs per sweep.")
-    parser.add_argument('--sweeps', type=int, default=10,
+    parser.add_argument('--sweeps', type=int, default=3,
                         help="Number of multilevel outer sweeps.")
     parser.add_argument('--hidden_dims', type=int, nargs='+', default=[64, 64],
                         help="List of hidden layer dimensions (e.g., --hidden_dims 64 64)")
@@ -52,7 +52,7 @@ def parse_args(args=None):
                         help="Oscillation parameter in the solution (PDE 2).")
     parser.add_argument('--lr', type=float, default=1e-3,
                         help="Learning rate for the optimizer.")
-    parser.add_argument('--levels', type=int, default=1,
+    parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
     parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0],
                         help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
@@ -65,6 +65,10 @@ def parse_args(args=None):
                         help="If set, do not remove plot files generated before.")
     parser.add_argument('--problem_id', type=int, default=1, choices=[1, 2],
                         help="PDE problem to solve: 1 or 2.")
+    parser.add_argument('--enforce_bc', action='store_true',
+                        help="If set, enforce the BC in solution.")
+    parser.add_argument('--bc_weight', type=float, default=1.0,
+                        help="Weight for the loss of BC.")
 
     return parser.parse_args(args)
 
