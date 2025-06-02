@@ -5,7 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
-
+operator/train/*.pth
+operator/data/*
 # Distribution / packaging
 .Python
 build/
