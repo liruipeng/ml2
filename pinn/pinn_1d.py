@@ -292,11 +292,15 @@ class Loss:
 
     # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
-        x = mesh.x_train.clone().detach().requires_grad_(True)
+        x = mesh.x_train.requires_grad_(True)#.clone().detach().requires_grad_(True)
         u = model.get_solution(x)
 
-        du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
-        d2u_dx2, = torch.autograd.grad(du_dx, x, grad_outputs=torch.ones_like(du_dx), create_graph=True)
+        du_dx = torch.autograd.grad(
+            u, x, grad_outputs=torch.ones_like(u), 
+            retain_graph=True, create_graph=True, allow_unused=True)[0]
+        d2u_dx2 = torch.autograd.grad(
+            du_dx, x, grad_outputs=torch.ones_like(du_dx), 
+            retain_graph=True, create_graph=True, allow_unused=True)[0]
 
         # Internal loss
         pde = mesh.pde
