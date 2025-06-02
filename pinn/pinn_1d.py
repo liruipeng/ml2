@@ -257,7 +257,8 @@ class MultiLevelNN(nn.Module):
             g0 = self.mesh.u_ex[0].item()
             g1 = self.mesh.u_ex[-1].item()
             # y = g0 * (1 - x) + g1 * x + x * (1 - x) * y
-            y = g0 * (1 - x) + g1 * x + (1 - torch.exp(x)) * (1 - torch.exp(x-1)) * y
+            #y = g0 * (1 - x) + g1 * x + (1 - torch.exp(x)) * (1 - torch.exp(x-1)) * y
+            y = g0 + (x-0)/(1-0)*(g1 - g0) + (1 - torch.exp(0-x)) * (1 - torch.exp(x-1)) * y # in domain x in [0, 1]
         return y
 
     # def _init_weights(self, m):
@@ -324,7 +325,7 @@ class Loss:
 def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots,
           sweep_idx, level_idx, frame_dir):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = StepLR(optimizer, step_size=5000, gamma=0.1)
+    scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
@@ -436,7 +437,7 @@ def main(args=None):
 # can run it like normal: python filename.py
 if __name__ == "__main__":
     if is_notebook():
-        err = main(['--levels', '4', '--epochs', '500', '--sweeps', '1', '--plot'])
+        err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot'])
     else:
         err = main()
     try:
