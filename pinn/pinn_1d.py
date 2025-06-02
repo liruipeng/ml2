@@ -258,7 +258,8 @@ class MultiLevelNN(nn.Module):
             g1 = self.mesh.u_ex[-1].item()
             # y = g0 * (1 - x) + g1 * x + x * (1 - x) * y
             #y = g0 * (1 - x) + g1 * x + (1 - torch.exp(x)) * (1 - torch.exp(x-1)) * y
-            y = g0 + (x-0)/(1-0)*(g1 - g0) + (1 - torch.exp(0-x)) * (1 - torch.exp(x-1)) * y # in domain x in [0, 1]
+            #y = g0 + (x-0)/(1-0)*(g1 - g0) + (1 - torch.exp(0-x)) * (1 - torch.exp(x-1)) * y # in domain x in [0, 1]
+            y = (1 - torch.exp(0-x)) * (1 - torch.exp(x-1)) * y 
         return y
 
     # def _init_weights(self, m):
