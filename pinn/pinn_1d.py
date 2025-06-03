@@ -53,6 +53,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
+import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients_1d
@@ -370,7 +371,10 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
                 # Plot Fourier coefficients
-                fourier_data, u_exact_vec, u_pred_vec, eval_points_for_vis = calculate_fourier_coefficients_1d(model, mesh, device=device)
+                fourier_data = calculate_fourier_coefficients_1d(model, mesh, device=device)
+                plt.figure(figsize=(12, 6))
+                plt.plot(fourier_data.frequencies, fourier_data.true_coeffs, label='Exact Solution', color='blue')
+                plt.plot(fourier_data.frequencies, fourier_data.nn_coeffs, label='Predicted Solution', color='orange')
             model.train()
 
 # %%

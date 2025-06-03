@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 import scipy.fft as fft
 import shutil
+from typing import NamedTuple
 
 
 def cleanfiles(dir_name):
@@ -143,6 +144,18 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     video.release()
     print(f"  Video saved as {output_file_path}")
 
+"""
+Fourier Analysis for 1D problems.
+"""
+class FourierData(NamedTuple):
+    nn_coeffs: list[float]
+    true_coeffs: list[float]
+    error_coeffs: list[float]
+    frequencies: list[tuple[int, str]]
+    u_exact_vec: list[float]
+    u_pred_vec: list[float]
+    eval_points_for_vis: list[float]
+
 def calculate_fourier_coefficients_1d(model, mesh, plot_resolution:int=100, fourier_freq:list[int]=[1, 4, 9], log_fourier_coefficients=True, device='cpu'):
     """
     Calculates the Fourier coefficients of u_NN, u_exact, and their error based on config.
@@ -230,5 +243,65 @@ def calculate_fourier_coefficients_1d(model, mesh, plot_resolution:int=100, four
             fourier_data['error_coeffs'] = [entry['error_val'] for entry in all_fourier_entries]
             fourier_data['frequencies'] = [(entry['k_tuple'][0], entry['type']) for entry in all_fourier_entries]
 
+    return FourierData(
+        nn_coeffs=fourier_data['nn_coeffs'],
+        true_coeffs=fourier_data['true_coeffs'],
+        error_coeffs=fourier_data['error_coeffs'],
+        frequencies=fourier_data['frequencies'],
+        u_exact_vec=u_exact_vec,
+        u_pred_vec=u_pred_vec,
+        eval_points_for_vis=eval_points_for_vis
+    )
 
-    return fourier_data, u_exact_vec, u_pred_vec, eval_points_for_vis
+def plot_fourier_coefficients(fourier_data: FourierData, output_filename='fourier_coefficients_evolution.png'):
+    epochs_logged = history_data['epochs_logged']
+    frequencies_logged = history_data['fourier_frequencies_logged']
+    
+    fig = plt.figure(figsize=(12, 7))
+    cmap = plt.get_cmap('tab10')
+
+    plot_count = 0
+
+    for i, freq_idx_tuple in enumerate(frequencies_logged):
+        freq_key = str(freq_idx_tuple)
+        nn_coeffs = fourier_data.nn_coeffs
+        true_coeffs = fourier_data.true_coeffs
+
+        if not nn_coeffs or not true_coeffs:
+            continue
+
+        color = cmap(i % cmap.N)
+        
+        if freq_idx_tuple[0] == 0:
+            label_nn = 'NN Coeff for $A_0$ (cos)'
+            label_true = 'True Coeff for $A_0$ (cos)'
+        elif freq_idx_tuple[1] == 'cos':
+            label_nn = f'NN Coeff for $A_{{{freq_idx_tuple[0]}}}$ (cos)'
+            label_true = f'True Coeff for $A_{{{freq_idx_tuple[0]}}}$ (cos)'
+        elif freq_idx_tuple[1] == 'sin':
+            label_nn = f'NN Coeff for $B_{{{freq_idx_tuple[0]}}}$ (sin)'
+            label_true = f'True Coeff for $B_{{{freq_idx_tuple[0]}}}$ (sin)'
+        else:
+            label_nn = f'NN Coeff for Freq {freq_idx_tuple}'
+            label_true = f'True Coeff for Freq {freq_idx_tuple}'
+
+        plt.plot(epochs_logged, nn_coeffs, solid_capstyle='projecting', 
+                 color=color, label=label_nn)
+        plt.plot(epochs_logged, true_coeffs, linestyle='--', color=color, 
+                 label=label_true)
+        plot_count += 1
+
+  
+    plt.xlabel('Epoch')
+    plt.ylabel('Coefficient Magnitude')
+    plt.yscale('log')
+    
+    if plot_count > 0:
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+    else:
+        print("Warning: No Fourier coefficients plotted for legend in plot_fourier_coefficients.")
+
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_filename))
+    plt.close(fig)
