@@ -44,7 +44,7 @@ def parse_args(args=None):
                         help="Lower bound of the 1D domain.")
     parser.add_argument('--bx', type=float, default=1.0,
                         help="Upper bound of the 1D domain.")
-    parser.add_argument('--high_freq', type=float, default=16,
+    parser.add_argument('--high_freq', type=int, default=16,
                         help="Highest frequency used in the PDE solution (PDE 1).")
     parser.add_argument('--gamma', type=float, default=0,
                         help="Coefficient \gamma in the PDE: -u_xx + \gamma u = f.")
