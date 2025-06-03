@@ -292,7 +292,7 @@ class Loss:
 
     # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
-        x = mesh.x_train.requires_grad_(True)#.clone().detach().requires_grad_(True)
+        x = mesh.x_train.requires_grad_(True)
         u = model.get_solution(x)
 
         du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
