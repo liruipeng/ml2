@@ -139,3 +139,19 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
         video.write(img)
     video.release()
     print(f"  Video saved as {output_file_path}")
+
+def calculate_fourier_coefficients_1d():
+    """
+    Calculates the Fourier coefficients of u_NN, u_exact, and their error based on config.
+
+    This function is strictly designed for 1D problems.
+
+    Returns:
+    - Dict with magnitudes of selected low-frequency coeffs for u_NN, u_exact, and error (or empty dict).
+    - True solution grid data for plotting (only meaningful for 1D).
+    - NN solution grid data for plotting (only meaningful for 1D).
+    - Evaluation points for plotting (only meaningful for 1D).
+    Ref: 
+        - https://github.com/liruipeng/ml2/blob/5956d7a54badf8ea966053c511e23f5fc8fcc9f2/tony/analysis/fourier.py
+    """
+    pass
