@@ -55,7 +55,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients_1d
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -359,6 +359,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
         if plot_freq > 0 and (np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1):
             model.eval()
             with torch.no_grad():
+                # Save the current model outputs and errors
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
@@ -368,6 +369,8 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
+                # Plot Fourier coefficients
+                fourier_data, u_exact_vec, u_pred_vec, eval_points_for_vis = calculate_fourier_coefficients_1d(model, mesh, device=device)
             model.train()
 
 # %%

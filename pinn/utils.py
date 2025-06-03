@@ -3,7 +3,10 @@ import argparse
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import cv2
+import numpy as np
 from pathlib import Path
+import torch
+import scipy.fft as fft
 import shutil
 
 
@@ -140,7 +143,7 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     video.release()
     print(f"  Video saved as {output_file_path}")
 
-def calculate_fourier_coefficients_1d():
+def calculate_fourier_coefficients_1d(model, mesh, plot_resolution:int=100, fourier_freq:list[int]=[1, 4, 9], log_fourier_coefficients=True, device='cpu'):
     """
     Calculates the Fourier coefficients of u_NN, u_exact, and their error based on config.
 
@@ -154,4 +157,78 @@ def calculate_fourier_coefficients_1d():
     Ref: 
         - https://github.com/liruipeng/ml2/blob/5956d7a54badf8ea966053c511e23f5fc8fcc9f2/tony/analysis/fourier.py
     """
-    pass
+    domain_bounds = (mesh.ax, mesh.bx)
+    # Generate 1D evaluation points for model inference and plotting
+    grid_coords = np.linspace(*domain_bounds, plot_resolution)
+    eval_points_for_vis = grid_coords[:, np.newaxis]
+    eval_points = torch.from_numpy(eval_points_for_vis.astype(np.float32)).to(device)
+
+    # Evaluate the neural network and true solution
+    model.eval()
+    with torch.no_grad():
+        u_pred_vec = model(eval_points).cpu().numpy().flatten()
+        u_exact_vec = mesh.pde.u_ex(eval_points).cpu().numpy().flatten()
+    error_vec = u_pred_vec - u_exact_vec
+
+    # Initialize fourier_data to be empty by default
+    fourier_data = {
+        'nn_coeffs': [],
+        'true_coeffs': [],
+        'error_coeffs': [],
+        'frequencies': []
+    }
+
+    if log_fourier_coefficients:
+            # Reshape to grid for FFT (for 1D, this is just a 1D array)
+            u_pred_grid = u_pred_vec.reshape(plot_resolution)
+            u_exact_grid = u_exact_vec.reshape(plot_resolution)
+            error_grid = error_vec.reshape(plot_resolution)
+
+            N_points = plot_resolution
+
+            fft_u_pred_complex = fft.fft(u_pred_grid)
+            fft_u_exact_complex = fft.fft(u_exact_grid)
+            fft_error_complex = fft.fft(error_grid)
+
+            all_fourier_entries = []
+
+            # A_0 (constant): A_0 = X_0.real / N
+            A0_nn = fft_u_pred_complex[0].real / N_points
+            A0_exact = fft_u_exact_complex[0].real / N_points
+            A0_error = fft_error_complex[0].real / N_points
+            all_fourier_entries.append({
+                'k_tuple': (0,), 'type': 'cos',
+                'nn_val': np.abs(A0_nn), 'exact_val': np.abs(A0_exact), 'error_val': np.abs(A0_error)
+            })
+
+            for k in fourier_freq:
+                if k == 0:
+                    pass
+
+                # A_k (cosine component): Ak = 2 * Re(Xk) / N
+                Ak_nn = 2 * fft_u_pred_complex[k].real / N_points
+                Ak_exact = 2 * fft_u_exact_complex[k].real / N_points
+                Ak_error = 2 * fft_error_complex[k].real / N_points
+                all_fourier_entries.append({
+                    'k_tuple': (k,), 'type': 'cos',
+                    'nn_val': np.abs(Ak_nn), 'exact_val': np.abs(Ak_exact), 'error_val': np.abs(Ak_error)
+                })
+
+                # B_k (sine component): Bk = -2 * Im(Xk) / N
+                Bk_nn = -2 * fft_u_pred_complex[k].imag / N_points
+                Bk_exact = -2 * fft_u_exact_complex[k].imag / N_points
+                Bk_error = -2 * fft_error_complex[k].imag / N_points
+                all_fourier_entries.append({
+                    'k_tuple': (k,), 'type': 'sin',
+                    'nn_val': np.abs(Bk_nn), 'exact_val': np.abs(Bk_exact), 'error_val': np.abs(Bk_error)
+                })
+            
+            all_fourier_entries.sort(key=lambda x: (x['k_tuple'][0], x['type']))
+
+            fourier_data['nn_coeffs'] = [entry['nn_val'] for entry in all_fourier_entries]
+            fourier_data['true_coeffs'] = [entry['exact_val'] for entry in all_fourier_entries]
+            fourier_data['error_coeffs'] = [entry['error_val'] for entry in all_fourier_entries]
+            fourier_data['frequencies'] = [(entry['k_tuple'][0], entry['type']) for entry in all_fourier_entries]
+
+
+    return fourier_data, u_exact_vec, u_pred_vec, eval_points_for_vis
