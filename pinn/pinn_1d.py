@@ -438,7 +438,7 @@ def main(args=None):
             model.set_scale(level_idx=l, scale=scale)
             # Crank that !@#$ up
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
-                  adam_iterations=int(args.epochs/2),
+                  adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=l, frame_dir=frame_dir)
     # Turn PNGs into a video using OpenCV
