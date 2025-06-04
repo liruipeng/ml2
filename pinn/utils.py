@@ -40,6 +40,8 @@ def parse_args(args=None):
                         help="Number of plotting points during training.")
     parser.add_argument('--epochs', type=int, default=10000,
                         help="Number of training epochs per sweep.")
+    parser.add_argument('--adam_epochs', type=int, default=None,
+                        help="Number of training epochs using Adam per sweep. Defaults to --epochs if not set.")
     parser.add_argument('--sweeps', type=int, default=3,
                         help="Number of multilevel outer sweeps.")
     parser.add_argument('--hidden_dims', type=int, nargs='+', default=[64, 64],
@@ -74,8 +76,13 @@ def parse_args(args=None):
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
 
-    return parser.parse_args(args)
+    args = parser.parse_args(args)
 
+    # Set adam_epochs to epochs if not provided
+    if args.adam_epochs is None:
+        args.adam_epochs = args.epochs
+
+    return args
 
 def print_args(args):
     print("Options used:")
