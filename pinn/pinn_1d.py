@@ -56,7 +56,7 @@ from torch.optim.lr_scheduler import StepLR
 import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients_1d
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients
 import utils
 
 # torch.set_default_dtype(torch.float64)
@@ -334,6 +334,26 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
+    # Initial 
+    history = {
+        'epochs_logged': [], 'total_loss': [], 'drm_loss': [], 'pinn_loss': [],
+        'l2_error_u': [], 'h1_seminorm_error_u': [], 'h2_seminorm_error_u': [],
+        'fourier_coeffs_nn_magnitudes': {}, 'fourier_coeffs_true_magnitudes': {},
+        'fourier_coeffs_error_magnitudes': {}, 'fourier_frequencies_logged': None,
+        'solution_snapshots_epochs': [],
+    }
+    u_exact_plot_data_flat = None
+    eval_points_for_plot_np = None
+    eval_points_for_plot_np, u_exact_plot_data_flat = utils.evaluate_and_log(
+        epoch=0,
+        u_nn_model=model,
+        history=history,
+        f_exact_func=mesh.pde.f,
+        u_exact_func=mesh.pde.u_ex,
+        eval_points_for_plot_np=eval_points_for_plot_np,
+        u_exact_plot_data_flat=u_exact_plot_data_flat,
+        full_uniform_grid_points=mesh.x_eval,
+    )
 
     for i in range(iterations):
         # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
@@ -376,6 +396,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
         
+        utils.evaluate_and_log(i, model, mesh, history, mesh.pde.f, mesh.pde.u_ex, eval_points_for_plot_np, u_exact_plot_data_flat, full_uniform_grid_points=mesh.x_eval)
         # Evaluation End
         model.train()
     

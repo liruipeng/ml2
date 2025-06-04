@@ -284,26 +284,21 @@ def calculate_fourier_coefficients(model, mesh, plot_resolution:int=100, fourier
     return fourier_data, u_exact_vec, u_pred_vec, eval_points_for_vis
 
 # Helper function for evaluation, logging, and saving
-def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_func, logger, rank_val,
+def evaluate_and_log(epoch, u_nn_model, mesh, history, f_exact_func, u_exact_func,
                      eval_points_for_plot_np, u_exact_plot_data_flat,
                      full_uniform_grid_points):
     u_nn_model.eval()
-
-    eval_points_for_errors = full_uniform_grid_points.requires_grad_(True).to(config.device)
+    device = u_nn_model.device
+    eval_points_for_errors = full_uniform_grid_points.requires_grad_(True).to(device)
 
     # Calculate losses
     drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, eval_points_for_errors)
-    pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, eval_points_for_errors, config.domain_dim)
-    total_loss = config.drm_weight * drm_loss + config.pinn_weight * pinn_loss
+    pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, eval_points_for_errors)
 
     if epoch == 0:
         history['total_loss'].append(total_loss.item())
         history['drm_loss'].append(drm_loss.item())
         history['pinn_loss'].append(pinn_loss.item())
-
-    logger.log_scalar('Loss/Total_Loss', total_loss.item(), step=epoch)
-    logger.log_scalar('Loss/DRM_Loss', drm_loss.item(), step=epoch)
-    logger.log_scalar('Loss/PINN_Loss', pinn_loss.item(), step=epoch)
 
     # L2 norm error
     u_pred_eval_l2 = u_nn_model(eval_points_for_errors)
@@ -326,14 +321,14 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
     h1_seminorm_error_u = torch.mean(torch.sum((grad_u_pred_eval - grad_u_exact_eval)**2, dim=1))
 
     # H2 seminorm error
-    laplacian_u_pred_eval = torch.zeros_like(u_pred_for_derivs, device=config.device)
+    laplacian_u_pred_eval = torch.zeros_like(u_pred_for_derivs, device=device)
     for i in range(config.domain_dim):
         d2u_dxi2 = torch.autograd.grad(grad_u_pred_eval[:, i], eval_points_for_derivs,
                                         grad_outputs=torch.ones_like(grad_u_pred_eval[:, i]),
                                         create_graph=True, allow_unused=True)[0][:, i]
         laplacian_u_pred_eval += d2u_dxi2.unsqueeze(1)
 
-    laplacian_u_exact_eval = torch.zeros_like(u_exact_for_derivs, device=config.device)
+    laplacian_u_exact_eval = torch.zeros_like(u_exact_for_derivs, device=device)
     for i in range(config.domain_dim):
         d2u_dxi2_star = torch.autograd.grad(grad_u_exact_eval[:, i], eval_points_for_derivs,
                                             grad_outputs=torch.ones_like(grad_u_exact_eval[:, i]),
@@ -352,7 +347,7 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
 
     # Fourier coefficient
     fourier_data, u_exact_plot_data_flat_current, u_pred_plot_data_flat_current, eval_points_for_plot_np_current = \
-        calculate_fourier_coefficients(config, u_nn_model, u_exact_func)
+        calculate_fourier_coefficients(u_nn_model, mesh)
 
     if history['fourier_frequencies_logged'] is None:
         history['fourier_frequencies_logged'] = fourier_data['frequencies']
