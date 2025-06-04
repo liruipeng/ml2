@@ -310,6 +310,25 @@ class Loss:
 
         return loss
 
+    def drm_loss(self, model, mesh: Mesh):
+        """Deep Ritz Method loss"""
+        xs = mesh.x_train.requires_grad_(True)
+        u_pred = model(xs)
+    
+        grad_u_pred = torch.autograd.grad(u_pred, xs, 
+                                        grad_outputs=torch.ones_like(u_pred), 
+                                        create_graph=True)[0]
+        
+        grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
+
+        f_val = mesh.pde.f_ex(xs)
+        fu_prod = f_val * u_pred
+
+        integrand_values = 0.5 * grad_u_pred_sq - fu_prod
+        loss = torch.mean(integrand_values)
+        xs.requires_grad_(False)  # Disable gradient tracking for x
+        return loss
+
     def loss(self, model, mesh):
         if self.type == -1:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
