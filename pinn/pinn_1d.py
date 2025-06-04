@@ -279,6 +279,8 @@ class Loss:
             self.name = "Super Loss"
         elif self.type == 0:
             self.name = "PINN Loss"
+        elif self.type == 1:
+            self.name = "DRM Loss"
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         self.bc_weight = bc_weight
@@ -321,7 +323,7 @@ class Loss:
         
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
 
-        f_val = mesh.pde.f_ex(xs)
+        f_val = mesh.pde.f(xs)
         fu_prod = f_val * u_pred
 
         integrand_values = 0.5 * grad_u_pred_sq - fu_prod
@@ -334,6 +336,8 @@ class Loss:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+        elif self.type == 1: 
+            loss_value = self.drm_loss(model=model, mesh=mesh)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
