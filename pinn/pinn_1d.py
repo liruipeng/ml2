@@ -57,6 +57,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients_1d
+import utils
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -346,19 +347,23 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
         optimizer.step()
         #
         scheduler.step()
-
+        # Evalutaion Start
+        model.eval()
+        # Calculate Losses 
+        drm_loss = utils.calculate_drm_loss(model, mesh.pde.u_ex, mesh.x_eval)
+        l2_loss = torch.norm(error)
+        inf_loss = torch.max(torch.abs(error))
+        # Evalutaion
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
-            model.eval()
             with torch.no_grad():
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
-                print(f"Iteration {i:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e}, "
-                      f"Err 2-norm: {torch.norm(error): .4e}, "
-                      f"inf-norm: {torch.max(torch.abs(error)):.4e}")
-            model.train()
+                print(f"Iteration {i:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e},",
+                      f"Err 2-norm: {l2_loss: .4e},",
+                      f"inf-norm: {inf_loss:.4e},",
+                      f"drm loss: {drm_loss:.4e},",)
 
         if plot_freq > 0 and (np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1):
-            model.eval()
             with torch.no_grad():
                 # Save the current model outputs and errors
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
@@ -370,12 +375,12 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
-                # Plot Fourier coefficients
-                fourier_data = calculate_fourier_coefficients_1d(model, mesh, device=device)
-                plt.figure(figsize=(12, 6))
-                plt.plot(fourier_data.frequencies, fourier_data.true_coeffs, label='Exact Solution', color='blue')
-                plt.plot(fourier_data.frequencies, fourier_data.nn_coeffs, label='Predicted Solution', color='orange')
-            model.train()
+        
+        # Evaluation End
+        model.train()
+    
+
+
 
 # %%
 # Define the main function
