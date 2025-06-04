@@ -53,9 +53,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
+import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients
+import utils
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -331,6 +333,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
+
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
@@ -361,19 +364,58 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
             #
             scheduler.step()
 
+    # Initial 
+    history = {
+        'epochs_logged': [], 'total_loss': [], 'drm_loss': [], 'pinn_loss': [],
+        'l2_error_u': [], 'h1_seminorm_error_u': [], 'h2_seminorm_error_u': [],
+        'fourier_coeffs_nn_magnitudes': {}, 'fourier_coeffs_true_magnitudes': {},
+        'fourier_coeffs_error_magnitudes': {}, 'fourier_frequencies_logged': None,
+        'solution_snapshots_epochs': [],
+    }
+    u_exact_plot_data_flat = None
+    eval_points_for_plot_np = None
+    eval_points_for_plot_np, u_exact_plot_data_flat = utils.evaluate_and_log(
+        epoch=0,
+        u_nn_model=model,
+        history=history,
+        f_exact_func=mesh.pde.f,
+        u_exact_func=mesh.pde.u_ex,
+        eval_points_for_plot_np=eval_points_for_plot_np,
+        u_exact_plot_data_flat=u_exact_plot_data_flat,
+        full_uniform_grid_points=mesh.x_eval,
+    )
+
+    for i in range(iterations):
+        # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
+        optimizer.zero_grad()
+        # compute the loss value for the current batch of data
+        loss = criterion.loss(model=model, mesh=mesh)
+        # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
+        # for every parameter x which has requires_grad=True.
+        loss.backward()
+        # update the model param doing an optim step using the computed gradients and learning rate
+        optimizer.step()
+        #
+        scheduler.step()
+        # Evalutaion Start
+        model.eval()
+        # Calculate Losses 
+        drm_loss = utils.calculate_drm_loss(model, mesh.pde.u_ex, mesh.x_eval)
+        l2_loss = torch.norm(error)
+        inf_loss = torch.max(torch.abs(error))
+        # Evalutaion
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
-            model.eval()
             with torch.no_grad():
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
-                print(f"Iteration {i:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e}, "
-                      f"Err 2-norm: {torch.norm(error): .4e}, "
-                      f"inf-norm: {torch.max(torch.abs(error)):.4e}")
-            model.train()
+                print(f"Iteration {i:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e},",
+                      f"Err 2-norm: {l2_loss: .4e},",
+                      f"inf-norm: {inf_loss:.4e},",
+                      f"drm loss: {drm_loss:.4e},",)
 
         if plot_freq > 0 and (np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1):
-            model.eval()
             with torch.no_grad():
+                # Save the current model outputs and errors
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
@@ -383,7 +425,13 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
-            model.train()
+        
+        utils.evaluate_and_log(i, model, mesh, history, mesh.pde.f, mesh.pde.u_ex, eval_points_for_plot_np, u_exact_plot_data_flat, full_uniform_grid_points=mesh.x_eval)
+        # Evaluation End
+        model.train()
+    
+
+
 
 # %%
 # Define the main function
