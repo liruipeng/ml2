@@ -322,29 +322,44 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots,
-          sweep_idx, level_idx, frame_dir):
+def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
+          num_check, num_plots, sweep_idx, level_idx, frame_dir):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
-    check_freq = (iterations + num_check - 1) // num_check
-    plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
+    use_lbfgs = False
 
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
+    check_freq = (iterations + num_check - 1) // num_check
+    plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
     for i in range(iterations):
-        # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
-        optimizer.zero_grad()
-        # compute the loss value for the current batch of data
-        loss = criterion.loss(model=model, mesh=mesh)
-        # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
-        # for every parameter x which has requires_grad=True.
-        loss.backward()
-        # update the model param doing an optim step using the computed gradients and learning rate
-        optimizer.step()
-        #
-        scheduler.step()
+        if i == adam_iterations:
+            use_lbfgs = True
+            optimizer = optim.LBFGS(model.parameters(), lr=learning_rate,
+                                    max_iter=20, tolerance_grad=1e-7, history_size=100)
+
+        def closure():
+            optimizer.zero_grad()
+            loss = criterion.loss(model=model, mesh=mesh)
+            loss.backward()
+            return loss
+
+        if use_lbfgs:
+            loss = optimizer.step(closure)
+        else:
+            # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
+            optimizer.zero_grad()
+            # compute the loss value for the current batch of data
+            loss = criterion.loss(model=model, mesh=mesh)
+            # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
+            # for every parameter x which has requires_grad=True.
+            loss.backward()
+            # update the model param doing an optim step using the computed gradients and learning rate
+            optimizer.step()
+            #
+            scheduler.step()
 
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
             model.eval()
@@ -423,6 +438,7 @@ def main(args=None):
             model.set_scale(level_idx=l, scale=scale)
             # Crank that !@#$ up
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
+                  adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=l, frame_dir=frame_dir)
     # Turn PNGs into a video using OpenCV
