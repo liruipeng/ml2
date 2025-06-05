@@ -79,7 +79,7 @@ class AdaFNN(nn.Module):
 
 
     def forward(self, xs, us):
-        scores = self.encode(xs, us)
+        scores, basess = self.encode(xs, us)
         us_restore = self.decode(xs, scores)
         return us_restore
     
@@ -101,7 +101,7 @@ class AdaFNN(nn.Module):
 
         assert scores.size() == (B, self.n_base), f"Expected shape (B, n_base), got {scores.size()}"
 
-        return scores
+        return scores, basess
     
     def decode(self, xs, scores):
         """
@@ -188,9 +188,9 @@ if __name__ == "__main__":
     """
     n_base = 9
     # Create Function Autoencoder Model 
-    model = AdaFNN(n_base=n_base, base_hidden=[64,64,64]).to(device)  # Change 'cpu' to 'cuda' if using GPU
+    model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256]).to(device)  # Change 'cpu' to 'cuda' if using GPU
     # Encode function into scores
-    scores = model.encode(xs.to(device), Us.to(device))
+    scores,_ = model.encode(xs.to(device), Us.to(device))
     # Decode scores back to function
     us_restore = model.decode(xs.to(device), scores)
     # Autoencoder
@@ -203,8 +203,43 @@ if __name__ == "__main__":
     assert torch.allclose(us_restore, us_restore2, atol=1e-6)
 
     # Train the model
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    model_opt = train(model, nstep=60000, optimizer=opt, data_gen=data_gen)
+    nstep = 160_000
+    lr=1e-3
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    model_opt = train(model, nstep=nstep, optimizer=opt, data_gen=data_gen)
 
+
+    # Evaluation 
+    with torch.no_grad():
+        model_opt.eval()
+        xs, us = data_gen()  # Generate new data for evaluation
+        us_restore = model_opt(xs.to(device), us.to(device))
+        scores, bases = model_opt.encode(xs.to(device), us.to(device))
+        us_restore = us_restore.cpu().numpy()
+        # Convert to numpy
+        scores = scores.cpu().numpy()
+        bases = bases.cpu().numpy()
+        xs = xs.cpu().numpy()
+        us = us.cpu().numpy()
+        # Plotting 
+        i = 0
+        fig, ax = plt.subplots()
+        ax.plot(xs[i], us[i], label='Original Function', color='blue')
+        ax.plot(xs[i], us_restore[i], label='Restored Function', color='red')
+        ax.legend()
+        ax.set_xlabel("x")
+        ax.set_ylabel("u(x)")
+
+        fig1, ax1 = plt.subplots()
+        js = np.argsort(np.abs(scores[i]))
+        ax1.plot(xs[i], bases[i, js[-1]], label='Basis Functions with highest score')
+        ax1.plot(xs[i], bases[i, js[-2]], label='Basis Functions with 2nd score')
+        ax1.set_xlabel("x")
+        ax1.set_ylabel("Basis Function Value")
+        ax1.legend()
+
+
+
+    
 
 # %%
