@@ -1,5 +1,9 @@
 """
 Deep Learning for Functional Data Analysis with Adaptive Basis Layers
+
+Reference:
+1. https://github.com/jwyyy/AdaFNN
+2. https://github.com/hanCi422/basis_operator_net/tree/main
 """
 #%%
 import numpy as np
@@ -13,24 +17,6 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import trange
 import matplotlib.pyplot as plt
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-class LayerNorm(nn.Module):
-
-    def __init__(self, d, eps=1e-6):
-        super().__init__()
-        # d is the normalization dimension
-        self.d = d
-        self.eps = eps
-        self.alpha = nn.Parameter(torch.randn(d))
-        self.beta = nn.Parameter(torch.randn(d))
-
-    def forward(self, x):
-        # x is a torch.Tensor
-        # avg is the mean value of a layer
-        avg = x.mean(dim=-1, keepdim=True)
-        # std is the standard deviation of a layer (eps is added to prevent dividing by zero)
-        std = x.std(dim=-1, keepdim=True) + self.eps
-        return (x - avg) / std * self.alpha + self.beta
 
 class NeuralBasis(nn.Module):
     def __init__(self, dim_in=1, hidden=[4,4,4], n_base=4, activation=None):
@@ -47,7 +33,7 @@ class NeuralBasis(nn.Module):
 
 def _inner_product(f1, f2, h):
     """    
-    f1 - (J) : B functions, observed at J time points,
+    f1 - (J) : observed at J time points,
     f2 - (J) : same as f1
     h  - (J-1,1): weights used in the trapezoidal rule
     pay attention to dimension
