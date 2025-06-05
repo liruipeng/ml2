@@ -56,6 +56,7 @@ from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from SOAP.soap import SOAP
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -325,6 +326,8 @@ class Loss:
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
           num_check, num_plots, sweep_idx, level_idx, frame_dir):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
+    #                  precondition_frequency=10)
     scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
     use_lbfgs = False
 
