@@ -162,7 +162,7 @@ if __name__ == "__main__":
     # Data Generation
     n_batch = 64
     # Weights of basis functions
-    zs = torch.asarray([20, 5, 5] + [1] * 47)
+    zs = torch.asarray([1, 1, 1] + [1] * 2)
     # Sensor Points
     n_xs = 100
     xs = torch.linspace(0, 1, n_xs).repeat(n_batch, 1)  # (n_batch, J)
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     assert torch.allclose(us_restore, us_restore2, atol=1e-6)
 
     # Train the model
-    nstep = 160_000
+    nstep = 10_000
     lr=1e-3
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     model_opt = train(model, nstep=nstep, optimizer=opt, data_gen=data_gen)
