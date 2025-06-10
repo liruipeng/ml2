@@ -145,7 +145,7 @@ def poly_sin_func(coeffs:torch.Tensor, x:torch.Tensor.float)->torch.Tensor.float
     x: single sensor point  
     """
     ws = torch.arange(1, len(coeffs) + 1) # [n,]
-    pi_ws = torch.pi * ws
+    pi_ws = 2*torch.pi * ws
 
     out = torch.dot(coeffs, torch.sin(pi_ws * x))
 
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     xs, Us = generate_data(zs, xs, n_batch=n_batch) # (n_batch, J)
     #data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
     high_freq = 8
-    n_xs = max(n_xs, high_freq * 2)  # Ensure n_xs is at least twice the highest frequency
+    n_xs = max(n_xs, high_freq * 2 + 1)  # Ensure n_xs is at least twice the highest frequency
     data_gen = lambda: generate_data_poly_sin(high_freq=high_freq, nx=n_xs, n_batch=n_batch)  # Generate data for the polynomial sine function
     """
     Model
@@ -238,7 +238,7 @@ if __name__ == "__main__":
     nstep = 100_000
     lr=1e-3
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, 1000, gamma=0.99, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(opt, 1000, gamma=0.9, last_epoch=-1)
     model_opt, losses = train(model, nstep=nstep, optimizer=opt, data_gen=data_gen, scheduler=scheduler)
 
     # Plotting the training loss
