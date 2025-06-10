@@ -212,7 +212,7 @@ if __name__ == "__main__":
     # Function response
     xs, Us = generate_data(zs, xs, n_batch=n_batch) # (n_batch, J)
     #data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
-    high_freq = 8
+    high_freq = 16
     n_xs = max(n_xs, high_freq * 2 + 1)  # Ensure n_xs is at least twice the highest frequency
     data_gen = lambda: generate_data_poly_sin(high_freq=high_freq, nx=n_xs, n_batch=n_batch)  # Generate data for the polynomial sine function
     """
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     
         # Evaluation 
         model_opt.eval()
-        for freq in [4, 8, 10]:
+        for freq in [4, 16, 30]:
             data_gen2 = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=n_batch)
             xs, us = data_gen2()  # Generate new data for evaluation
             us_restore = model_opt(xs.to(device), us.to(device))
