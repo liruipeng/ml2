@@ -246,6 +246,7 @@ if __name__ == "__main__":
     ax.plot(losses, label='Training Loss', color='blue')
     ax.set_xlabel('Training Steps')
     ax.set_ylabel('Loss')
+    ax.set_yscale('log')
     # Evaluation
     with torch.no_grad():
         error_means = []
