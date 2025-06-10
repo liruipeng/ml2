@@ -7,6 +7,7 @@ __pycache__/
 *.so
 operator/train/*.pth
 operator/data/*
+pinn/frames/
 # Distribution / packaging
 .Python
 build/
