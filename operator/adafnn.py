@@ -132,7 +132,45 @@ def generate_data(zs, xs, n_batch=100):
     us = torch.bmm(phis.transpose(1,2), cs.unsqueeze(-1))  # (n_batch, J)
     return xs, us.squeeze(dim=-1)  # (n_batch, J)
 
-def train(model, nstep, optimizer, data_gen):
+
+def poly_sin_func(coeffs:torch.Tensor, x:torch.Tensor.float)->torch.Tensor.float:
+    """
+    The function to compute the polynomial sine function based on the coefficients and sensor points.
+
+    $$
+    f(x) = \sum_{n=1}^{N} c_n \sin(n \pi x)
+    $$
+
+    coeffs: [n,]. c_1,...,c_n are the coefficients of the polynomial sine function
+    x: single sensor point  
+    """
+    ws = torch.arange(1, len(coeffs) + 1) # [n,]
+    pi_ws = torch.pi * ws
+
+    out = torch.dot(coeffs, torch.sin(pi_ws * x))
+
+    return out 
+
+poly_sin_func_batched = torch.vmap(poly_sin_func, in_dims=(None, 0))
+
+def generate_data_poly_sin(high_freq:int, nx:int, n_batch:int)->torch.Tensor:
+    """
+    Generate data based on the polynomial sine function with random coefficients.
+
+    high_freq: highest frequency used in the polynomial sine function
+    n_x: number of sensor points
+    n_batch: number of batch
+    """
+    xs = torch.linspace(0, 1, nx).repeat(n_batch, 1)# Random sensor points (n_batch, nx)
+    coeffs = torch.randn(n_batch, high_freq)  # Random coefficients for the polynomial sine function
+    us = torch.vmap(poly_sin_func_batched, in_dims=(0, 0))(coeffs, xs)  # Apply the function to each batch
+    return xs, us
+
+
+"""
+Training
+"""
+def train(model, nstep, optimizer, data_gen, scheduler=None):
     """
     Train the model for nstep steps.
     """
@@ -151,9 +189,56 @@ def train(model, nstep, optimizer, data_gen):
         # Backward pass
         loss.backward()
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         tstep.set_postfix(loss=loss.item())
     return model
+
+
+class PDE:
+    def __init__(self, high=None, mu=70, r=0, problem=1):
+        # omega = [high]
+        omega = list(range(1, high + 1))
+        # omega = list(range(2, high + 1, 2))
+        # omega = [2**i for i in range(high.bit_length()) if 2**i <= high]
+        coeff = [1] * len(omega)
+
+        self.w = omega
+        self.c = coeff
+        self.mu = mu
+        self.r = r
+        if problem == 1:
+            self.f = self.f_1
+            self.u_ex = self.u_ex_1
+        else:
+            self.f = self.f_2
+            self.u_ex = self.u_ex_2
+
+    # Source term
+    def f_1(self, x):
+        y = torch.zeros_like(x)
+        for w, c in zip(self.w, self.c):
+            pi_w = torch.pi * w
+            y += c * (pi_w ** 2 + self.r) * torch.sin(pi_w * x)
+        return y
+
+    def f_2(self, x):
+        z = x ** 2
+        a = self.r + 4 * z * (self.mu ** 2 - 1) + 2
+        b = self.mu * z
+        c = 8 * b - 2 * self.mu
+        return torch.exp(-z) * (a * torch.sin(b) + c * torch.cos(b))
+
+    # Analytical solution
+    def u_ex_1(self, x):
+        y = torch.zeros_like(x)
+        for w, c in zip(self.w, self.c):
+            y += c * torch.sin(w * torch.pi * x)
+        return y
+
+    def u_ex_2(self, x):
+        return torch.exp(-x**2) * torch.sin(self.mu * x ** 2)
 
 if __name__ == "__main__":
     """
@@ -168,11 +253,13 @@ if __name__ == "__main__":
     xs = torch.linspace(0, 1, n_xs).repeat(n_batch, 1)  # (n_batch, J)
     # Function response
     xs, Us = generate_data(zs, xs, n_batch=n_batch) # (n_batch, J)
-    data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
+    #data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
+    high_freq = 8
+    data_gen = lambda: generate_data_poly_sin(high_freq=high_freq, nx=n_xs, n_batch=n_batch)  # Generate data for the polynomial sine function
     """
     Model
     """
-    n_base = 9
+    n_base = 30
     # Create Function Autoencoder Model 
     model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256]).to(device)  # Change 'cpu' to 'cuda' if using GPU
     # Encode function into scores
@@ -189,16 +276,43 @@ if __name__ == "__main__":
     assert torch.allclose(us_restore, us_restore2, atol=1e-6)
 
     # Train the model
-    nstep = 10_000
+    nstep = 20_000
     lr=1e-3
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    model_opt = train(model, nstep=nstep, optimizer=opt, data_gen=data_gen)
+    scheduler = torch.optim.lr_scheduler.StepLR(opt, 1000, gamma=0.9, last_epoch=-1)
+    model_opt = train(model, nstep=nstep, optimizer=opt, data_gen=data_gen, scheduler=scheduler)
 
-
-    # Evaluation 
+    error_means = []
+    error_stds = []
     with torch.no_grad():
+        # Evalution on multiple frequency 
+        freqs = np.array(list(range(1,40,1)))
+        for freq in freqs:
+            data_gen_test = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=500)
+            xs_test, us_test = data_gen_test()
+            us_pred = model_opt(xs_test.to(device), us_test.to(device))
+
+            errors = torch.abs(us_pred - us_test.to(device)).cpu()
+            error_means.append(errors.mean().item())
+            error_stds.append(errors.std().item())
+        error_means = np.array(error_means)
+        error_stds = np.array(error_stds)
+
+        # Plotting the error vs frequency
+        fig, ax = plt.subplots()
+        ax.plot(freqs, error_means, marker='o', linestyle='-', color='blue')
+        ax.fill_between(freqs, error_means - error_stds, error_means + error_stds, color='blue', alpha=0.2)
+        ax.set_xlabel('Max Frequency Mode')
+        ax.set_ylabel('Mean Absolute Error')
+        ax.set_title('Error vs Frequency')
+        ax.axvline(x=high_freq, color='red', linestyle='--', label='Training Frequency')
+        ax.legend()
+        plt.yscale('log')
+    
+        # Evaluation 
         model_opt.eval()
-        xs, us = data_gen()  # Generate new data for evaluation
+        data_gen2 = lambda: generate_data_poly_sin(high_freq=16, nx=n_xs, n_batch=n_batch)
+        xs, us = data_gen2()  # Generate new data for evaluation
         us_restore = model_opt(xs.to(device), us.to(device))
         scores, bases = model_opt.encode(xs.to(device), us.to(device))
         us_restore = us_restore.cpu().numpy()
@@ -208,21 +322,21 @@ if __name__ == "__main__":
         xs = xs.cpu().numpy()
         us = us.cpu().numpy()
         # Plotting 
-        i = 0
-        fig, ax = plt.subplots()
-        ax.plot(xs[i], us[i], label='Original Function', color='blue')
-        ax.plot(xs[i], us_restore[i], label='Restored Function', color='red')
-        ax.legend()
-        ax.set_xlabel("x")
-        ax.set_ylabel("u(x)")
+        for i in [0,1]:
+            fig, ax = plt.subplots()
+            ax.plot(xs[i], us[i], label='Original Function', color='blue')
+            ax.plot(xs[i], us_restore[i], label='Restored Function', color='red')
+            ax.legend()
+            ax.set_xlabel("x")
+            ax.set_ylabel("u(x)")
 
-        fig1, ax1 = plt.subplots()
-        js = np.argsort(np.abs(scores[i]))
-        ax1.plot(xs[i], bases[i, js[-1]], label='Basis Functions with highest score')
-        ax1.plot(xs[i], bases[i, js[-2]], label='Basis Functions with 2nd score')
-        ax1.set_xlabel("x")
-        ax1.set_ylabel("Basis Function Value")
-        ax1.legend()
+            fig1, ax1 = plt.subplots()
+            js = np.argsort(np.abs(scores[i]))
+            ax1.plot(xs[i], bases[i, js[-1]], label='Basis Functions with highest score')
+            ax1.plot(xs[i], bases[i, js[-2]], label='Basis Functions with 2nd score')
+            ax1.set_xlabel("x")
+            ax1.set_ylabel("Basis Function Value")
+            ax1.legend()
 
 
 
