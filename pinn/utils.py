@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
 import shutil
+from scipy.fft import fft, fftfreq
+import numpy as np
 
 
 def cleanfiles(dir_name):
@@ -146,3 +148,15 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
         video.write(img)
     video.release()
     print(f"  Video saved as {output_file_path}")
+
+def fourier_analysis(x, y):
+    """
+    Plot absolute value of cosine coefficients of the Fourier series
+    Ref: https://docs.scipy.org/doc/scipy/tutorial/fft.html
+    """
+    N = len(x)
+    T = x[1] - x[0]
+    yf = fft(y)
+    xf = fftfreq(N, T)[:N//2]
+    y_plot = 2.0/N * np.abs(yf[0:N//2])
+    return xf, y_plot
