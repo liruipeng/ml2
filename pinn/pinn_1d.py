@@ -388,7 +388,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
-                fft_error = calculate_fourier_coefficients_error(u_analytic, u_eval, fourier_freqs=[1,4,9])
+                fft_error = calculate_fourier_coefficients_error(u_analytic.cpu().numpy(), u_eval.cpu().numpy(), fourier_freqs=[1,4,9])
                 fft_errors.append(fft_error)
 
             model.train()
