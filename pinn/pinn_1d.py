@@ -382,14 +382,15 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
+                fft_error = calculate_fourier_coefficients_error(to_np(u_analytic), to_np(u_eval), fourier_freqs=fourier_freqs)
+                fft_errors.append(fft_error) # Save the Fourier errors over iterations
+
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
                            iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
-                fft_error = calculate_fourier_coefficients_error(to_np(u_analytic), to_np(u_eval), fourier_freqs=fourier_freqs)
-                fft_errors.append(fft_error)
 
             model.train()
 
