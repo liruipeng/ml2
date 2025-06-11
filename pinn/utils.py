@@ -166,3 +166,7 @@ def calculate_fourier_coefficients(u:list[float], fourier_freqs:list[int])->Four
     Bk = np.abs(Bk)
     return FourierData(sin_coeffs=Bk, 
                        cos_coeffs=Ak, fourier_freqs=fourier_freqs)
+
+def calculate_fourier_coefficients_error(u1:list[float], u2:list[float], fourier_freqs:list[int])->FourierData:
+    error_vec = u1 - u2
+    return calculate_fourier_coefficients(error_vec, fourier_freqs)
