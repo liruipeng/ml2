@@ -150,9 +150,29 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     print(f"  Video saved as {output_file_path}")
 
 class FourierData(NamedTuple):
-    sin_coeffs: list[float]
-    cos_coeffs: list[float]
-    fourier_freqs: list[float]
+    sin_coeffs: np.ndarray # 1D
+    cos_coeffs: np.ndarray # 1D
+    fourier_freqs: np.ndarray # 1D
+
+    def append(self, other: 'FourierData') -> 'FourierData':
+        assert self.fourier_freqs == other.fourier_freqs, "Fourier frequencies must match to append."
+
+        arrs = [self.sin_coeffs, other.sin_coeffs, self.cos_coeffs, other.cos_coeffs]
+
+        for arr in arrs: 
+            if len(arr.shape) == 1:
+                arr = arr[:, np.newaxis]
+
+        sin_coeffs = np.stack([arrs[0], arrs[1]], axis=-1)
+        cos_coeffs = np.stack([arrs[2], arrs[3]], axis=-1)
+
+        return FourierData(
+            sin_coeffs=sin_coeffs,
+            cos_coeffs=cos_coeffs,
+            fourier_freqs=self.fourier_freqs
+        )
+
+
 
 def calculate_fourier_coefficients(u:list[float], fourier_freqs:list[int])->FourierData:
     fft_u = fft.fft(u)
