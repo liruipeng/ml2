@@ -102,8 +102,6 @@ class AdaFNN(nn.Module):
 """
 Data Generation
 """
-grids = torch.linspace(0, 1, 100)
-
 def _phi(k, t):
     """
     basis functions
@@ -197,6 +195,43 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
         tstep.set_postfix(loss=loss.item())
     return model, losses
 
+"""
+Evaluation
+"""
+def error_over_freqs(model:nn.Module, n_xs:int, n_batch:int):
+    is_train = model.training
+    model.eval()
+    with torch.no_grad():
+        error_means = []
+        error_stds = []
+        # Evalution on multiple frequency 
+        freqs = np.array(list(range(1,n_xs//2 - 1,1))) ## Less than half of the sampling frequency
+        for freq in freqs:
+            data_gen_test = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=n_batch)
+            xs_test, us_test = data_gen_test()
+            us_pred = model(xs_test.to(device), us_test.to(device))
+
+            errors = torch.abs(us_pred - us_test.to(device)).cpu()
+            error_means.append(errors.mean().item())
+            error_stds.append(errors.std().item())
+        error_means = np.array(error_means)
+        error_stds = np.array(error_stds)
+    model.train() if is_train else None # Restore the mode
+    return freqs, error_means, error_stds
+
+def plot_error_over_freqs(max_freq, model:nn.Module, n_xs:int, n_batch:int):
+    freqs, error_means, error_stds  = error_over_freqs(model, n_xs, n_batch)
+    fig, ax = plt.subplots()
+    ax.plot(freqs, error_means, marker='o', linestyle='-', color='blue')
+    ax.fill_between(freqs, error_means - error_stds, error_means + error_stds, color='blue', alpha=0.2)
+    ax.set_xlabel('Max Frequency Mode')
+    ax.set_ylabel('Mean Absolute Error')
+    ax.set_title('Error vs Max Frequency')
+    ax.axvline(x=max_freq, color='red', linestyle='--', label='Training Frequency')
+    ax.legend()
+    ax.set_yscale('log')
+    return fig, ax
+
 
 if __name__ == "__main__":
     """
@@ -235,7 +270,7 @@ if __name__ == "__main__":
     assert torch.allclose(us_restore, us_restore2, atol=1e-6)
 
     # Train the model
-    nstep = 100_000
+    nstep = 1#00_000
     lr=1e-3
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.StepLR(opt, 1000, gamma=0.9, last_epoch=-1)
@@ -249,33 +284,9 @@ if __name__ == "__main__":
     ax.set_yscale('log')
     # Evaluation
     with torch.no_grad():
-        error_means = []
-        error_stds = []
-        # Evalution on multiple frequency 
-        freqs = np.array(list(range(1,n_xs//2,1))) ## Sampling up to twice the highest frequency
-        for freq in freqs:
-            data_gen_test = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=500)
-            xs_test, us_test = data_gen_test()
-            us_pred = model_opt(xs_test.to(device), us_test.to(device))
-
-            errors = torch.abs(us_pred - us_test.to(device)).cpu()
-            error_means.append(errors.mean().item())
-            error_stds.append(errors.std().item())
-        error_means = np.array(error_means)
-        error_stds = np.array(error_stds)
-
-        # Plotting the error vs frequency
-        fig, ax = plt.subplots()
-        ax.plot(freqs, error_means, marker='o', linestyle='-', color='blue')
-        ax.fill_between(freqs, error_means - error_stds, error_means + error_stds, color='blue', alpha=0.2)
-        ax.set_xlabel('Max Frequency Mode')
-        ax.set_ylabel('Mean Absolute Error')
-        ax.set_title('Error vs Frequency')
-        ax.axvline(x=high_freq, color='red', linestyle='--', label='Training Frequency')
-        ax.legend()
-        plt.yscale('log')
+        model_opt.eval()
+        fig1, ax1 = plot_error_over_freqs(high_freq, model_opt, n_xs=n_xs, n_batch=n_batch)
     
-        # Evaluation 
         model_opt.eval()
         for freq in [4, 16, 30]:
             data_gen2 = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=n_batch)
