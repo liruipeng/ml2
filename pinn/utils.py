@@ -73,7 +73,7 @@ def parse_args(args=None):
                         help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
-    parser.add_argument('--fourier_freq', type=int, nargs='+', default=[1, 4, 9],
+    parser.add_argument('--fourier_freqs', type=int, nargs='+', default=[1, 4, 9],
                         help='Frequency of Fourier coefficients to log.')
 
     args = parser.parse_args(args)

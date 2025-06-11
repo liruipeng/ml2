@@ -324,7 +324,7 @@ class Loss:
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir, fourier_freq=[1, 4, 9]):
+          num_check, num_plots, sweep_idx, level_idx, frame_dir, fourier_freqs=[1, 4, 9]):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
@@ -388,7 +388,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
-                fft_error = calculate_fourier_coefficients_error(u_analytic.cpu().numpy(), u_eval.cpu().numpy(), fourier_freqs=fourier_freq)
+                fft_error = calculate_fourier_coefficients_error(to_np(u_analytic), to_np(u_eval), fourier_freqs=fourier_freqs)
                 fft_errors.append(fft_error)
 
             model.train()
@@ -419,7 +419,7 @@ def main(args=None):
                          dim_inputs=dim_inputs, dim_outputs=dim_outputs,
                          dim_hidden=args.hidden_dims,
                          act=get_activation(args.activation),
-                         enforce_bc=args.enforce_bc, fourier_freq=args.fourier_freq)
+                         enforce_bc=args.enforce_bc)
     print(model)
     model.to(device)
     # Plotting
@@ -448,7 +448,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir)
+                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, fourier_freqs=args.fourier_freqs)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
