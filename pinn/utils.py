@@ -146,3 +146,6 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
         video.write(img)
     video.release()
     print(f"  Video saved as {output_file_path}")
+
+def calculate_fourier_coefficients(u_pred, u_exact):
+    pass
