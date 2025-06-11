@@ -55,7 +55,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, calculate_fourier_coefficients_error, FourierData
 from SOAP.soap import SOAP
 
 # torch.set_default_dtype(torch.float64)
@@ -336,6 +336,8 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
+    fft_errors = FourierData.placeholder()
+
 
     for i in range(iterations):
         if i == adam_iterations:
@@ -386,6 +388,9 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
                            xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
+                fft_error = calculate_fourier_coefficients_error(u_analytic, u_eval, fourier_freqs=[1,4,9])
+                fft_errors.append(fft_error)
+
             model.train()
 
 # %%

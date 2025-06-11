@@ -155,6 +155,8 @@ class FourierData(NamedTuple):
     fourier_freqs: np.ndarray # 1D
 
     def append(self, other: 'FourierData') -> 'FourierData':
+        if self.sin_coeffs.shape[0]==0: # Empty self, return other
+            return other
         assert self.fourier_freqs == other.fourier_freqs, "Fourier frequencies must match to append."
 
         arrs = [self.sin_coeffs, other.sin_coeffs, self.cos_coeffs, other.cos_coeffs]
@@ -171,7 +173,12 @@ class FourierData(NamedTuple):
             cos_coeffs=cos_coeffs,
             fourier_freqs=self.fourier_freqs
         )
-
+    def placeholder()-> 'FourierData':
+        return FourierData(
+            sin_coeffs=np.array([]),
+            cos_coeffs=np.array([]),
+            fourier_freqs=np.array([])
+        )
 
 
 def calculate_fourier_coefficients(u:list[float], fourier_freqs:list[int])->FourierData:
