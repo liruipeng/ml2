@@ -4,8 +4,10 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
+import scipy.fft as fft
 import shutil
-
+import numpy as np
+from typing import NamedTuple
 
 def cleanfiles(dir_name):
     dir_path = Path(dir_name)
@@ -147,5 +149,20 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     video.release()
     print(f"  Video saved as {output_file_path}")
 
-def calculate_fourier_coefficients(u_pred, u_exact):
-    pass
+class FourierData(NamedTuple):
+    sin_coeffs: list[float]
+    cos_coeffs: list[float]
+    fourier_freqs: list[float]
+
+def calculate_fourier_coefficients(u:list[float], fourier_freqs:list[int])->FourierData:
+    fft_u = fft.fft(u)
+    N = len(u)
+    # A_k (cosine component): Ak = 2 * Re(Xk) / N
+    Ak = 2 * fft_u[fourier_freqs].real / N 
+    # B_k (sine component): Bk = -2 * Im(Xk) / N
+    Bk = 2 * fft_u[fourier_freqs].imag / N 
+
+    Ak = np.abs(Ak)
+    Bk = np.abs(Bk)
+    return FourierData(sin_coeffs=Bk, 
+                       cos_coeffs=Ak, fourier_freqs=fourier_freqs)
