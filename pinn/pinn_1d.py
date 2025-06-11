@@ -55,9 +55,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis
 from SOAP.soap import SOAP
-
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -380,6 +379,11 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
+                xf_eval, uf_eval = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval))
+                xf_analytic, uf_analytic = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic))
+                save_frame(x=xf_eval, t=uf_analytic, y=uf_eval,
+                           xs=None,  ys=None,
+                           iteration=[sweep_idx, level_idx, i], title="Model_feq_Outputs", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
                            iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
