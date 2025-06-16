@@ -55,7 +55,7 @@ def _l2(f, h):
 
 class AdaFNN(nn.Module):
 
-    def __init__(self, n_base=4, base_hidden=[64, 64, 64], activation=torch.nn.ReLU()):
+    def __init__(self, n_base=4, base_hidden=[64, 64, 64], activation=torch.nn.ReLU(), fourier_feature=None):
         """
         labda1      : penalty of L1 regularization, a positive real number
         lambda2     : penalty of L2 regularization, a positive real number
@@ -73,9 +73,20 @@ class AdaFNN(nn.Module):
         self.device = device
         self.n_base = n_base
         self.dim_in = 1
+        self.fourier_feature = fourier_feature
         # instantiate each basis node in the basis layer
-        self.BL = NeuralBasis(dim_in=self.dim_in, hidden=base_hidden, n_base = n_base, activation=activation)
 
+        dim_in = 1
+        if fourier_feature is not None:
+            m=100
+            dim_in = 2*m
+            sigma = 5
+            B1 = torch.rand(m, 1) * sigma
+            B2 = torch.rand(m, 1) * sigma
+            self.B1= nn.Parameter(B1, requires_grad=True)
+            self.B2 = nn.Parameter(B2, requires_grad=True)
+
+        self.BL = NeuralBasis(dim_in=dim_in, hidden=base_hidden, n_base = n_base, activation=activation)
 
     def forward(self, xs, us):
         scores, basess = self.encode(xs, us)
@@ -93,7 +104,6 @@ class AdaFNN(nn.Module):
         hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
         # evaluate the current basis nodes at time grid
         basess = self.BL(xs.reshape(-1,1)).reshape(B,self.n_base,J) # (B, n_base, J)
-
         scores = torch.vmap(torch.vmap(_inner_product, in_dims=(0, None, None)), in_dims=(0, 0, 0))(basess, us, hs)
         # (B, n_bases, J), (B, J), (B, J-1)
 
@@ -107,10 +117,22 @@ class AdaFNN(nn.Module):
         scores: (B, n_base) : B functions, encoded into n_base scores
         """
         B, J = xs.size()
-        
         basess = self.BL(xs.reshape(-1,1)).reshape(B,J,self.n_base) # (B, J, n_base)
         us_restore = torch.bmm(basess, scores.unsqueeze(-1)).squeeze(-1)  # (B, J, n_base) x (B, n_base, 1) -> (B, J, 1)
         return us_restore
+    
+    def get_bases(self, xs):
+        B, J = xs.size()
+        _xs = xs.unsqueeze(dim=-1)  # (B, J, 1)
+        if self.fourier_feature is not None:
+            Bxs = torch.einsum("BJD, MD-> BJM", _xs, self.B1)
+            sin_xs = torch.sin(Bxs)  # (B, J, M)
+            cos_xs = torch.cos(Bxs)  # (B, J, M)
+            feature = torch.cat([sin_xs, cos_xs], dim=-1)  # (B, J, 2M)
+            basess = self.BL(feature)
+        else: 
+            basess = self.BL(_xs)
+        return basess
 
     def get_bases_products(self, xs, basess, n_choice=None):
         hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
@@ -322,7 +344,7 @@ if __name__ == "__main__":
     """
     n_base = 45
     # Create Function Autoencoder Model 
-    model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256]).to(device)  # Change 'cpu' to 'cuda' if using GPU
+    model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256], fourier_feature=True).to(device)  # Change 'cpu' to 'cuda' if using GPU
     # Encode function into scores
     scores,_ = model.encode(xs.to(device), Us.to(device))
     # Decode scores back to function
