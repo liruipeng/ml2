@@ -26,7 +26,7 @@ size = comm.Get_size()
 # Helper function for evaluation, logging, and saving
 def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_func, logger, rank_val,
                      eval_points_for_plot_np, u_exact_plot_data_flat,
-                     full_uniform_grid_points, current_drm_weight, current_pinn_weight): # Add weights as args
+                     full_uniform_grid_points, current_drm_weight, current_pinn_weight):
     u_nn_model.eval()
 
     eval_points_for_errors = full_uniform_grid_points.requires_grad_(True).to(config.device)
@@ -485,26 +485,6 @@ if __name__ == "__main__":
 
     # Create the config object for THIS rank
     rank_config = PoissonSolverConfig(**base_config_kwargs)
-
-    if rank_config.drm_steps_per_cycle > 0 or rank_config.pinn_steps_per_cycle > 0:
-        if rank_config.steps_per_cycle == 0: # Avoid division by zero if both are 0
-            print("Warning: Both drm_steps_per_cycle and pinn_steps_per_cycle are 0. Defaulting to initial drm_weight=0.0, pinn_weight=1.0.")
-            rank_config.drm_weight = args.drm_weight # Fallback to original parser args
-            rank_config.pinn_weight = args.pinn_weight # Fallback to original parser args
-        else:
-            print(f"Using cyclic weighting: DRM for {rank_config.drm_steps_per_cycle} steps, PINN for {rank_config.pinn_steps_per_cycle} steps per cycle.")
-            # Set initial weights for epoch 0 to the first phase of the cycle
-            if rank_config.drm_steps_per_cycle > 0:
-                rank_config.drm_weight = 1.0
-                rank_config.pinn_weight = 0.0
-            else: # If DRM steps is 0, start with PINN
-                rank_config.drm_weight = 0.0
-                rank_config.pinn_weight = 1.0
-    else:
-        print("Using fixed weights from command line arguments.")
-        rank_config.drm_weight = args.drm_weight
-        rank_config.pinn_weight = args.pinn_weight
-
 
     print(f"Rank {rank}: Starting its experiment run{rank+1}.")
     model_state_dict, history = run_experiment(rank_config, rank)
