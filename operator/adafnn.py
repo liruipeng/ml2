@@ -112,7 +112,8 @@ class AdaFNN(nn.Module):
         us_restore = torch.bmm(basess, scores.unsqueeze(-1)).squeeze(-1)  # (B, J, n_base) x (B, n_base, 1) -> (B, J, 1)
         return us_restore
 
-    def get_normalized(self, basess, hs, n_choice=None):
+    def get_bases_products(self, xs, basess, n_choice=None):
+        hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
         # Noramalization: compute each basis node's L2 norm normalize basis nodes
         n_choice = n_choice if n_choice is not None else self.n_base
         ids = np.random.choice(self.n_base, n_choice, replace=False)  # Randomly select n_choice basis nodes
@@ -130,30 +131,25 @@ class AdaFNN(nn.Module):
                                        in_dims=(0, 0, 0))(_basess, _basess, hs) # (B, n_base, J), (B, n_base, J), (B, J-1)
         
         return m_scores
-    
-    def R1(self, l1_k):
-        """
-        L1 regularization
-        l1_k : number of basis nodes to regularize, integer        
-        """
-        # sample l1_k basis nodes to regularize
-        selected = np.random.choice(self.n_base, min(l1_k, self.n_base), replace=False)
-        selected_bases = torch.cat([self.normalized_bases[i] for i in selected], dim=0) # (k, J)
-        return torch.mean(_l1(selected_bases, self.h))
 
-    def R2(self, l2_pairs):
-        """
-        L2 regularization
-        l2_pairs : number of pairs to regularize, integer  
-        """
-        k = min(l2_pairs, self.n_base * (self.n_base - 1) // 2)
-        f1, f2 = [None] * k, [None] * k
-        for i in range(k):
-            a, b = np.random.choice(self.n_base, 2, replace=False)
-            f1[i], f2[i] = self.normalized_bases[a], self.normalized_bases[b]
-        return torch.mean(torch.abs(_inner_product(torch.cat(f1, dim=0),
-                                                                  torch.cat(f2, dim=0),
-                                                                  self.h)))
+    def get_R1_R2(self, xs, bases, n_choice=None):
+        m_scores = self.get_bases_products(xs, bases, n_choice=n_choice)
+        r1 = self.R1(m_scores)
+        r2 = self.R2(m_scores)
+        return r1, r2
+    
+    @staticmethod
+    def R1(m_scores):
+        # sample l1_k basis nodes to regularize
+        norm2 = torch.diagonal(m_scores) # <u1,u1>, <u2,u2>, ..., <un,un>
+        ideal_norm2 = torch.ones_like(norm2)  # Ideal norm is 1 for each basis node
+        return F.mse_loss(norm2, ideal_norm2)  # Mean squared error loss between actual and ideal norms
+    
+    @staticmethod
+    def R2(m_scores):
+        cross_norm = torch.triu(m_scores, diagonal=1)
+        idea_cross_norm = torch.zeros_like(cross_norm)  # Ideal cross norm is 0 for each pair
+        return F.mse_loss(cross_norm, idea_cross_norm)  # Mean squared error
 """
 Data Generation
 """
@@ -223,11 +219,19 @@ def generate_data_poly_sin(high_freq:int, nx:int, n_batch:int)->torch.Tensor:
 """
 Training
 """
-def loss_fn(model, xs, us, l1_k:int=2, l2_pairs:int=3, lambda1:float=1., lambda2:float=1.):
-    us_restore = model(xs, us)
+def loss_fn(model, xs, us, n_choose:int=5, lambda1:float=1., lambda2:float=1.):
+    # ENCODE
+    scores, bases = model.encode(xs, us)  # Encode the function into scores
+    # DECODE
+    us_restore = model.decode(xs, scores)  # Decode the scores back to function
+
     loss_res = F.mse_loss(us_restore, us)  # Mean squared error loss
-    loss_r1 = model.R1(l1_k=l1_k) if lambda1 !=0 else torch.zeros(1).to(model.deivce)  # Regularization term for L1
-    loss_r2 = model.R2(l2_pairs=l2_pairs) if lambda2 != 0 else torch.zeros(1).to(model.deivce)  # Regularization term
+
+    if (n_choose > 0)  and  (lambda1>0 or lambda2>0):
+        loss_r1, loss_r2 = model.get_R1_R2(xs, bases, n_choice=n_choose)  # Get R1 and R2 regularization losses
+    else: 
+        loss_r1, loss_r2 = torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+
     return loss_res + lambda1*loss_r1 + lambda2*loss_r2, (loss_res, loss_r1, loss_r2)
     
 
@@ -247,7 +251,7 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
         # Forward pass
         us_restore = model(xs, us)
         # Compute loss (mean squared error)
-        loss,_ = loss_fn(model, xs, us, l1_k=2, l2_pairs=3, lambda1=1.0, lambda2=1.0)
+        loss, (loss_res, loss_r1, loss_r2) = loss_fn(model, xs, us, lambda1=1.0, lambda2=1.0)
         # Backward pass
         loss.backward()
         optimizer.step()
@@ -255,7 +259,7 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
             scheduler.step()
         # Logging
         losses.append(loss.detach().item())
-        tstep.set_postfix(loss=loss.item())
+        tstep.set_description(f"loss: {loss:.2e} / loss_res: {loss_res:.2e} / loss_r1: {loss_r1:.2e} / loss_r2: {loss_r2:.2e}")
     return model, losses
 
 """
@@ -310,7 +314,7 @@ if __name__ == "__main__":
     # Function response
     xs, Us = generate_data(zs, xs, n_batch=n_batch) # (n_batch, J)
     #data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
-    high_freq = 16
+    high_freq = 8
     n_xs = max(n_xs, high_freq * 2 + 1)  # Ensure n_xs is at least twice the highest frequency
     data_gen = lambda: generate_data_poly_sin(high_freq=high_freq, nx=n_xs, n_batch=n_batch)  # Generate data for the polynomial sine function
     """
@@ -333,7 +337,7 @@ if __name__ == "__main__":
     assert torch.allclose(us_restore, us_restore2, atol=1e-6)
 
     # Train the model
-    nstep = 1#00_000
+    nstep = 100_000
     lr=1e-3
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.StepLR(opt, 1000, gamma=0.9, last_epoch=-1)
