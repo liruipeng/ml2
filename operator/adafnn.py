@@ -42,10 +42,23 @@ def _inner_product(f1, f2, h):
     prod = f1 * f2 # (B, J = len(h) + 1)
     return torch.matmul((prod[:-1] + prod[1:]), h)/2
 
+def _l1(f, h):
+    # f dimension : ( B bases, J )
+    B, J = f.size()
+    return _inner_product(torch.abs(f), torch.ones((B, J)), h)
+
+
+def _l2(f, h):
+    # f dimension : ( B bases, J )
+    # output dimension - ( B bases, 1 )
+    return torch.sqrt(_inner_product(f, f, h)) 
+
 class AdaFNN(nn.Module):
 
     def __init__(self, n_base=4, base_hidden=[64, 64, 64], activation=torch.nn.ReLU(), fourier_feature=None):
         """
+        labda1      : penalty of L1 regularization, a positive real number
+        lambda2     : penalty of L2 regularization, a positive real number
         n_base      : number of basis nodes, integer
         base_hidden : hidden layers used in each basis node, array of integers
         grid        : observation time grid, array of sorted floats including 0.0 and 1.0
@@ -90,8 +103,7 @@ class AdaFNN(nn.Module):
         # send the time grid tensor to device
         hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
         # evaluate the current basis nodes at time grid
-        basess = self.get_bases(xs)  # (B, n_base, J)
-        basess = basess.reshape(B,self.n_base,J) # (B, n_base, J)
+        basess = self.BL(xs.reshape(-1,1)).reshape(B,self.n_base,J) # (B, n_base, J)
         scores = torch.vmap(torch.vmap(_inner_product, in_dims=(0, None, None)), in_dims=(0, 0, 0))(basess, us, hs)
         # (B, n_bases, J), (B, J), (B, J-1)
 
@@ -105,8 +117,7 @@ class AdaFNN(nn.Module):
         scores: (B, n_base) : B functions, encoded into n_base scores
         """
         B, J = xs.size()
-        basess = self.get_bases(xs) # (B,n_base,J)
-        basess = basess.reshape(B,J,self.n_base) # (B, n_base, J)
+        basess = self.BL(xs.reshape(-1,1)).reshape(B,J,self.n_base) # (B, J, n_base)
         us_restore = torch.bmm(basess, scores.unsqueeze(-1)).squeeze(-1)  # (B, J, n_base) x (B, n_base, 1) -> (B, J, 1)
         return us_restore
     
@@ -123,11 +134,47 @@ class AdaFNN(nn.Module):
             basess = self.BL(_xs)
         return basess
 
+    def get_bases_products(self, xs, basess, n_choice=None):
+        hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
+        # Noramalization: compute each basis node's L2 norm normalize basis nodes
+        n_choice = n_choice if n_choice is not None else self.n_base
+        ids = np.random.choice(self.n_base, n_choice, replace=False)  # Randomly select n_choice basis nodes
+        _basess = basess[:, ids, :]  # (B, n_choice, J)
+        # Create scores matrix
+        # [<u1,u1>, <u1,u2>, ..., <u1,un>]
+        # [<u2,u1>, <u2,u2>, ..., <u2,un>]
+        # ...
+        # [<un,u1>, <un,u2>, ..., <un,un>
+        m_scores = torch.vmap(
+                    torch.vmap(
+                        torch.vmap(_inner_product,  # (J,), (J,), (J-1)
+                                       in_dims=(None, 0, None)), # (J,), (n_base,J), (J-1)
+                                       in_dims=(0, None, None)), # (n_base, J), (n_base, J), (J-1)
+                                       in_dims=(0, 0, 0))(_basess, _basess, hs) # (B, n_base, J), (B, n_base, J), (B, J-1)
+        
+        return m_scores
+
+    def get_R1_R2(self, xs, bases, n_choice=None):
+        m_scores = self.get_bases_products(xs, bases, n_choice=n_choice)
+        r1 = self.R1(m_scores)
+        r2 = self.R2(m_scores)
+        return r1, r2
+    
+    @staticmethod
+    def R1(m_scores):
+        # sample l1_k basis nodes to regularize
+        norm2 = torch.diagonal(m_scores) # <u1,u1>, <u2,u2>, ..., <un,un>
+        ideal_norm2 = torch.ones_like(norm2)  # Ideal norm is 1 for each basis node
+        return F.mse_loss(norm2, ideal_norm2)  # Mean squared error loss between actual and ideal norms
+    
+    @staticmethod
+    def R2(m_scores):
+        cross_norm = torch.triu(m_scores, diagonal=1)
+        idea_cross_norm = torch.zeros_like(cross_norm)  # Ideal cross norm is 0 for each pair
+        return F.mse_loss(cross_norm, idea_cross_norm)  # Mean squared error
 """
 Data Generation
 """
-grids = torch.linspace(0, 1, 100)
-
 def _phi(k, t):
     """
     basis functions
@@ -194,6 +241,22 @@ def generate_data_poly_sin(high_freq:int, nx:int, n_batch:int)->torch.Tensor:
 """
 Training
 """
+def loss_fn(model, xs, us, n_choose:int=5, lambda1:float=1., lambda2:float=1.):
+    # ENCODE
+    scores, bases = model.encode(xs, us)  # Encode the function into scores
+    # DECODE
+    us_restore = model.decode(xs, scores)  # Decode the scores back to function
+
+    loss_res = F.mse_loss(us_restore, us)  # Mean squared error loss
+
+    if (n_choose > 0)  and  (lambda1>0 or lambda2>0):
+        loss_r1, loss_r2 = model.get_R1_R2(xs, bases, n_choice=n_choose)  # Get R1 and R2 regularization losses
+    else: 
+        loss_r1, loss_r2 = torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+
+    return loss_res + lambda1*loss_r1 + lambda2*loss_r2, (loss_res, loss_r1, loss_r2)
+    
+
 def train(model, nstep, optimizer, data_gen, scheduler=None):
     """
     Train the model for nstep steps.
@@ -210,7 +273,7 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
         # Forward pass
         us_restore = model(xs, us)
         # Compute loss (mean squared error)
-        loss = F.mse_loss(us_restore, us)
+        loss, (loss_res, loss_r1, loss_r2) = loss_fn(model, xs, us, lambda1=1.0, lambda2=1.0)
         # Backward pass
         loss.backward()
         optimizer.step()
@@ -218,8 +281,45 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
             scheduler.step()
         # Logging
         losses.append(loss.detach().item())
-        tstep.set_postfix(loss=loss.item())
+        tstep.set_description(f"loss: {loss:.2e} / loss_res: {loss_res:.2e} / loss_r1: {loss_r1:.2e} / loss_r2: {loss_r2:.2e}")
     return model, losses
+
+"""
+Evaluation
+"""
+def error_over_freqs(model:nn.Module, n_xs:int, n_batch:int):
+    is_train = model.training
+    model.eval()
+    with torch.no_grad():
+        error_means = []
+        error_stds = []
+        # Evalution on multiple frequency 
+        freqs = np.array(list(range(1,n_xs//2 - 1,1))) ## Less than half of the sampling frequency
+        for freq in freqs:
+            data_gen_test = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=n_batch)
+            xs_test, us_test = data_gen_test()
+            us_pred = model(xs_test.to(device), us_test.to(device))
+
+            errors = torch.abs(us_pred - us_test.to(device)).cpu()
+            error_means.append(errors.mean().item())
+            error_stds.append(errors.std().item())
+        error_means = np.array(error_means)
+        error_stds = np.array(error_stds)
+    model.train() if is_train else None # Restore the mode
+    return freqs, error_means, error_stds
+
+def plot_error_over_freqs(max_freq, model:nn.Module, n_xs:int, n_batch:int):
+    freqs, error_means, error_stds  = error_over_freqs(model, n_xs, n_batch)
+    fig, ax = plt.subplots()
+    ax.plot(freqs, error_means, marker='o', linestyle='-', color='blue')
+    ax.fill_between(freqs, error_means - error_stds, error_means + error_stds, color='blue', alpha=0.2)
+    ax.set_xlabel('Max Frequency Mode')
+    ax.set_ylabel('Mean Absolute Error')
+    ax.set_title('Error vs Max Frequency')
+    ax.axvline(x=max_freq, color='red', linestyle='--', label='Training Frequency')
+    ax.legend()
+    ax.set_yscale('log')
+    return fig, ax
 
 
 if __name__ == "__main__":
@@ -236,13 +336,13 @@ if __name__ == "__main__":
     # Function response
     xs, Us = generate_data(zs, xs, n_batch=n_batch) # (n_batch, J)
     #data_gen = lambda: generate_data(zs, xs, n_batch=n_batch)  
-    high_freq = 16
+    high_freq = 8
     n_xs = max(n_xs, high_freq * 2 + 1)  # Ensure n_xs is at least twice the highest frequency
     data_gen = lambda: generate_data_poly_sin(high_freq=high_freq, nx=n_xs, n_batch=n_batch)  # Generate data for the polynomial sine function
     """
     Model
     """
-    n_base = 15
+    n_base = 45
     # Create Function Autoencoder Model 
     model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256], fourier_feature=True).to(device)  # Change 'cpu' to 'cuda' if using GPU
     # Encode function into scores
@@ -273,33 +373,9 @@ if __name__ == "__main__":
     ax.set_yscale('log')
     # Evaluation
     with torch.no_grad():
-        error_means = []
-        error_stds = []
-        # Evalution on multiple frequency 
-        freqs = np.array(list(range(1,n_xs//2,1))) ## Sampling up to twice the highest frequency
-        for freq in freqs:
-            data_gen_test = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=500)
-            xs_test, us_test = data_gen_test()
-            us_pred = model_opt(xs_test.to(device), us_test.to(device))
-
-            errors = torch.abs(us_pred - us_test.to(device)).cpu()
-            error_means.append(errors.mean().item())
-            error_stds.append(errors.std().item())
-        error_means = np.array(error_means)
-        error_stds = np.array(error_stds)
-
-        # Plotting the error vs frequency
-        fig, ax = plt.subplots()
-        ax.plot(freqs, error_means, marker='o', linestyle='-', color='blue')
-        ax.fill_between(freqs, error_means - error_stds, error_means + error_stds, color='blue', alpha=0.2)
-        ax.set_xlabel('Max Frequency Mode')
-        ax.set_ylabel('Mean Absolute Error')
-        ax.set_title('Error vs Frequency')
-        ax.axvline(x=high_freq, color='red', linestyle='--', label='Training Frequency')
-        ax.legend()
-        plt.yscale('log')
+        model_opt.eval()
+        fig1, ax1 = plot_error_over_freqs(high_freq, model_opt, n_xs=n_xs, n_batch=n_batch)
     
-        # Evaluation 
         model_opt.eval()
         for freq in [4, 16, 30]:
             data_gen2 = lambda: generate_data_poly_sin(high_freq=freq, nx=n_xs, n_batch=n_batch)
