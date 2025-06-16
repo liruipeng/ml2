@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import torch.optim as optim
 from mpi4py import MPI
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from config.poisson import PoissonSolverConfig
 from pde.poisson import get_manufactured_solution
@@ -25,7 +26,7 @@ size = comm.Get_size()
 # Helper function for evaluation, logging, and saving
 def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_func, logger, rank_val,
                      eval_points_for_plot_np, u_exact_plot_data_flat,
-                     full_uniform_grid_points):
+                     full_uniform_grid_points, current_drm_weight, current_pinn_weight): # Add weights as args
     u_nn_model.eval()
 
     eval_points_for_errors = full_uniform_grid_points.requires_grad_(True).to(config.device)
@@ -33,12 +34,18 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
     # Calculate losses
     drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, eval_points_for_errors)
     pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, eval_points_for_errors, config.domain_dim)
-    total_loss = config.drm_weight * drm_loss + config.pinn_weight * pinn_loss
+    
+    # Use the passed current weights for logging/total loss calculation during evaluation
+    total_loss = current_drm_weight * drm_loss + current_pinn_weight * pinn_loss
 
     if epoch == 0:
         history['total_loss'].append(total_loss.item())
         history['drm_loss'].append(drm_loss.item())
         history['pinn_loss'].append(pinn_loss.item())
+        # Also log the weights for epoch 0
+        logger.log_scalar('Weights/DRM_Weight', current_drm_weight, step=epoch)
+        logger.log_scalar('Weights/PINN_Weight', current_pinn_weight, step=epoch)
+
 
     logger.log_scalar('Loss/Total_Loss', total_loss.item(), step=epoch)
     logger.log_scalar('Loss/DRM_Loss', drm_loss.item(), step=epoch)
@@ -54,11 +61,11 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
     u_pred_for_derivs = u_nn_model(eval_points_for_derivs)
     u_exact_for_derivs = u_exact_func(eval_points_for_derivs)
     grad_u_pred_eval = torch.autograd.grad(u_pred_for_derivs, eval_points_for_derivs,
-                                            grad_outputs=torch.ones_like(u_pred_for_derivs),
-                                            create_graph=True, allow_unused=True)[0]
+                                           grad_outputs=torch.ones_like(u_pred_for_derivs),
+                                           create_graph=True, allow_unused=True)[0]
     grad_u_exact_eval = torch.autograd.grad(u_exact_for_derivs, eval_points_for_derivs,
-                                            grad_outputs=torch.ones_like(u_exact_for_derivs),
-                                            create_graph=True, allow_unused=True)[0]
+                                           grad_outputs=torch.ones_like(u_exact_for_derivs),
+                                           create_graph=True, allow_unused=True)[0]
     if grad_u_pred_eval is None: grad_u_pred_eval = torch.zeros_like(eval_points_for_derivs)
     if grad_u_exact_eval is None: grad_u_exact_eval = torch.zeros_like(eval_points_for_derivs)
 
@@ -122,7 +129,7 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
             eval_points_for_plot_np = eval_points_for_plot_np_current
             u_exact_plot_data_flat = u_exact_plot_data_flat_current
             logger.save_plot_data({'eval_points': eval_points_for_plot_np, 'u_exact_data': u_exact_plot_data_flat},
-                                   'true_solution_data', epoch)
+                                  'true_solution_data', epoch)
             logger.log_message(f"Saved true solution and evaluation points for plotting.")
 
         # Save NN solution snapshots
@@ -156,7 +163,6 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
 
     return eval_points_for_plot_np, u_exact_plot_data_flat
 
-
 # --- Main Training Loop for a Single Experiment Run ---
 def run_experiment(config: PoissonSolverConfig, rank_val):
     print(f"Rank {rank_val}: Initializing experiment")
@@ -181,8 +187,8 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
 
     # PDE & Boundary Functions
     u_exact_func, f_exact_func = get_manufactured_solution(config.case_number, config.domain_dim)
-    g0_func = get_g0_func(u_exact_func, config.domain_dim, config.domain_bounds)
-    d_func = get_d_func(config.domain_dim, config.domain_bounds)
+    g0_func = get_g0_func(u_exact_func, config.domain_dim, config.domain_bounds, "hermite_cubic_2nd_deriv")
+    d_func = get_d_func(config.domain_dim, config.domain_bounds, "ratio_bubble_dist")
 
     # Uniform grid
     full_uniform_grid_points = generate_uniform_grid_points(
@@ -212,6 +218,15 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
         lr_scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_decay_gamma)
     elif config.lr_scheduler_type == 'MultiStepLR':
         lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=config.lr_step_milestones, gamma=config.lr_step_gamma)
+    elif config.lr_scheduler_type == 'ReduceLROnPlateau':
+        lr_scheduler = ReduceLROnPlateau(
+            optimizer,
+            mode=config.lr_patience_mode,
+            factor=config.lr_factor,
+            patience=config.lr_patience,
+            min_lr=config.lr_min,
+            verbose=True
+        )
     else:
         lr_scheduler = None
 
@@ -231,6 +246,13 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
     start_total_time = time.time()
 
     # Initial evaluation and checkpoint
+    if config.steps_per_cycle > 0:
+        current_drm_weight = 1.0
+        current_pinn_weight = 0.0
+    else:
+        current_drm_weight = config.drm_weight
+        current_pinn_weight = config.pinn_weight
+
     logger.log_message(f"--- Epoch 0 ---")
     eval_points_for_plot_np, u_exact_plot_data_flat = evaluate_and_log(
         epoch=0,
@@ -243,7 +265,9 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
         rank_val=rank_val,
         eval_points_for_plot_np=eval_points_for_plot_np,
         u_exact_plot_data_flat=u_exact_plot_data_flat,
-        full_uniform_grid_points=full_uniform_grid_points
+        full_uniform_grid_points=full_uniform_grid_points,
+        current_drm_weight=current_drm_weight, 
+        current_pinn_weight=current_pinn_weight
     )
     torch.save(u_nn_model.state_dict(), os.path.join(rank_model_path, f'model_epoch_0.pth'))
     logger.log_message(f"Checkpoint saved at epoch 0")
@@ -252,21 +276,32 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
         u_nn_model.train()
         optimizer.zero_grad()
 
+        # Determine current step within the cycle
+        if config.steps_per_cycle > 0 and epoch > config.drm_steps_per_cycle / 2:
+            current_angle = 2 * np.pi / config.steps_per_cycle * (epoch - config.drm_steps_per_cycle)
+            current_drm_weight = 1 / (1 + np.exp(0.01 * config.steps_per_cycle * np.sin(current_angle)))
+            current_pinn_weight = 1.0 - current_drm_weight
+                
+        # Log the current weights
+        logger.log_scalar('Weights/DRM_Weight', current_drm_weight, step=epoch)
+        logger.log_scalar('Weights/PINN_Weight', current_pinn_weight, step=epoch)
+
         # Mini-batching for domain points from the pre-generated grid
         train_batch_size = min(config.batch_size, total_domain_points_in_grid)
         indices = torch.randperm(total_domain_points_in_grid)[:train_batch_size]
         sampled_domain_points_batch = full_uniform_grid_points[indices].requires_grad_(True).to(config.device)
 
-        # Calculate losses using the sampled batches
+        # Calculate losses using the sampled batches and current weights
         drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, sampled_domain_points_batch)
         pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, sampled_domain_points_batch, config.domain_dim)
         
-        total_loss = config.drm_weight * drm_loss + config.pinn_weight * pinn_loss
+        total_loss = current_drm_weight * drm_loss + current_pinn_weight * pinn_loss
 
         total_loss.backward()
         optimizer.step()
 
-        if lr_scheduler:
+        # Apply step-based schedulers every epoch
+        if lr_scheduler and config.lr_scheduler_type != 'ReduceLROnPlateau':
             lr_scheduler.step()
 
         # Log losses for current epoch
@@ -287,8 +322,15 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
                 rank_val=rank_val,
                 eval_points_for_plot_np=eval_points_for_plot_np,
                 u_exact_plot_data_flat=u_exact_plot_data_flat,
-                full_uniform_grid_points=full_uniform_grid_points
+                full_uniform_grid_points=full_uniform_grid_points,
+                current_drm_weight=current_drm_weight, # Pass weights for eval/logging
+                current_pinn_weight=current_pinn_weight
             )
+            # Apply ReduceLROnPlateau when metric is available (after evaluate_and_log)
+            if lr_scheduler and config.lr_scheduler_type == 'ReduceLROnPlateau':
+                metric = history['total_loss'][-1] # Use the last logged total loss as the metric
+                lr_scheduler.step(metric)
+
 
         if epoch % config.checkpoint_freq == 0: # Check for checkpoint frequency
             torch.save(u_nn_model.state_dict(), os.path.join(rank_model_path, f'model_epoch_{epoch}.pth'))
@@ -301,7 +343,7 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
     
     # Return the log directory for plotting (which is unique for this rank)
     rank_log_dir_for_plotting = logger.log_dir
-    logger.close() 
+    logger.close()  
 
     # Return state_dict and history for gathering by rank 0
     return u_nn_model.state_dict(), history
@@ -328,12 +370,14 @@ if __name__ == "__main__":
                         help='List of integers for the number of neurons in each hidden layer.')
     parser.add_argument('--activation', type=str, nargs='+', default=['tanh'],
                         help='Activation function(s). Can be a single string (e.g., "relu") or a list (e.g., "tanh" "relu").')
-
-    # Loss weights
     parser.add_argument('--drm_weight', type=float, default=0.0,
-                        help='Weight for the DRM loss term.')
+                        help='Weight for the DRM loss term (used if drm_steps_per_cycle is 0).')
     parser.add_argument('--pinn_weight', type=float, default=1.0,
-                        help='Weight for the PINN (PDE residual) loss term.')
+                        help='Weight for the PINN (PDE residual) loss term (used if pinn_steps_per_cycle is 0).')
+    parser.add_argument('--drm_steps_per_cycle', type=int, default=0,
+                        help='Number of epochs to train with DRM loss active in each cycle.')
+    parser.add_argument('--pinn_steps_per_cycle', type=int, default=0,
+                        help='Number of epochs to train with PINN loss active in each cycle.')
 
     # Sampling parameters
     parser.add_argument('--num_uniform_partition', type=int, default=64,
@@ -344,7 +388,8 @@ if __name__ == "__main__":
     # Optimization
     parser.add_argument('--optimizer_type', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS'],
                         help='Type of optimizer to use (e.g., Adam, SGD, LBFGS).')
-    parser.add_argument('--lr_scheduler_type', type=str, default='MultiStepLR', choices=['ExponentialLR', 'MultiStepLR', 'None'],
+    parser.add_argument('--lr_scheduler_type', type=str, default='ReduceLROnPlateau',
+                        choices=['ExponentialLR', 'MultiStepLR', 'ReduceLROnPlateau', 'None'],
                         help='Type of learning rate scheduler.')
     parser.add_argument('--lr_decay_gamma', type=float, default=0.999,
                         help='Gamma for ExponentialLR (decay rate per epoch).')
@@ -352,6 +397,14 @@ if __name__ == "__main__":
                         help='List of epochs when learning rate should drop for MultiStepLR.')
     parser.add_argument('--lr_step_gamma', type=float, default=0.1,
                         help='Factor by which to multiply the learning rate at milestones for MultiStepLR.')
+    parser.add_argument('--lr_patience', type=int, default=50,
+                        help='Number of epochs with no improvement after which learning rate will be reduced for ReduceLROnPlateau.')
+    parser.add_argument('--lr_factor', type=float, default=0.5,
+                        help='Factor by which the learning rate will be reduced for ReduceLROnPlateau.')
+    parser.add_argument('--lr_min', type=float, default=1e-6,
+                        help='Minimum learning rate for ReduceLROnPlateau.')
+    parser.add_argument('--lr_patience_mode', type=str, default='min', choices=['min', 'max'],
+                        help='Mode for ReduceLROnPlateau (e.g., "min" for loss, "max" for accuracy).')
 
     # Logging and plotting
     parser.add_argument('--logging_freq', type=int, default=50,
@@ -359,7 +412,9 @@ if __name__ == "__main__":
     parser.add_argument('--plot_resolution', type=int, default=256,
                         help='Resolution for plotting grids')
     parser.add_argument('--log_fourier_coeffs', type=bool, default=True,
-                    help='Whether to log Fourier coefficients in the real basis.')
+                        help='Whether to log Fourier coefficients in the real basis.')
+    parser.add_argument('--use_sine_series', type=bool, default=True, # Renamed in analysis/fourier.py
+                        help='Whether to use sine series expansion instead of full Fourier series expansion.')
     parser.add_argument('--fourier_freq', type=int, nargs='+', default=[1, 4, 9],
                         help='Frequency of Fourier coefficients to log.')
     parser.add_argument('--base_log_dir', type=str, default='logs',
@@ -392,6 +447,8 @@ if __name__ == "__main__":
         'activation': parsed_activation,
         'drm_weight': args.drm_weight,
         'pinn_weight': args.pinn_weight,
+        'drm_steps_per_cycle': args.drm_steps_per_cycle,
+        'pinn_steps_per_cycle': args.pinn_steps_per_cycle,
         'num_epochs': args.epochs,
         'learning_rate': args.lr,
         'num_uniform_partition': args.num_uniform_partition,
@@ -402,15 +459,20 @@ if __name__ == "__main__":
         'lr_decay_gamma': args.lr_decay_gamma,
         'lr_step_milestones': args.lr_step_milestones,
         'lr_step_gamma': args.lr_step_gamma,
+        'lr_patience': args.lr_patience,
+        'lr_factor': args.lr_factor,
+        'lr_min': args.lr_min,
+        'lr_patience_mode': args.lr_patience_mode,
         'plot_resolution': args.plot_resolution,
         'log_fourier_coefficients': args.log_fourier_coeffs,
+        'use_sine_series': args.use_sine_series, 
         'fourier_freq': args.fourier_freq,
         'base_log_dir': args.base_log_dir,
         'base_model_save_dir': args.base_model_save_dir,
         'logging_freq': args.logging_freq,
         'checkpoint_freq': args.checkpoint_freq,
         'slice_plane_dim': args.slice_plane_dim,
-        'slice_plane_val': args.slice_plane_val
+        'slice_plane_val': args.slice_plane_val,
     }
 
     # Set domain bounds based on dimension
@@ -423,6 +485,26 @@ if __name__ == "__main__":
 
     # Create the config object for THIS rank
     rank_config = PoissonSolverConfig(**base_config_kwargs)
+
+    if rank_config.drm_steps_per_cycle > 0 or rank_config.pinn_steps_per_cycle > 0:
+        if rank_config.steps_per_cycle == 0: # Avoid division by zero if both are 0
+            print("Warning: Both drm_steps_per_cycle and pinn_steps_per_cycle are 0. Defaulting to initial drm_weight=0.0, pinn_weight=1.0.")
+            rank_config.drm_weight = args.drm_weight # Fallback to original parser args
+            rank_config.pinn_weight = args.pinn_weight # Fallback to original parser args
+        else:
+            print(f"Using cyclic weighting: DRM for {rank_config.drm_steps_per_cycle} steps, PINN for {rank_config.pinn_steps_per_cycle} steps per cycle.")
+            # Set initial weights for epoch 0 to the first phase of the cycle
+            if rank_config.drm_steps_per_cycle > 0:
+                rank_config.drm_weight = 1.0
+                rank_config.pinn_weight = 0.0
+            else: # If DRM steps is 0, start with PINN
+                rank_config.drm_weight = 0.0
+                rank_config.pinn_weight = 1.0
+    else:
+        print("Using fixed weights from command line arguments.")
+        rank_config.drm_weight = args.drm_weight
+        rank_config.pinn_weight = args.pinn_weight
+
 
     print(f"Rank {rank}: Starting its experiment run{rank+1}.")
     model_state_dict, history = run_experiment(rank_config, rank)
@@ -450,7 +532,7 @@ if __name__ == "__main__":
         if rank == 0:
             print(f"Rank 0: Generating Ensemble Visualizations for {size} runs in total)")
             plot_ensemble_norm_errors(args.base_log_dir, all_histories, rank_config,
-                                      output_filename=f'ensemble_norm_errors.png')
+                                    output_filename=f'ensemble_norm_errors.png')
             print("Rank 0: Ensemble plots complete.")
 
     comm.Barrier()

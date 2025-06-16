@@ -24,19 +24,27 @@ class PoissonSolverConfig:
         self.hidden_neurons = kwargs.get('hidden_neurons', [20, 20, 20]) # Array of numbers of intermediate neurons
         self.activation = kwargs.get('activation', 'tanh') # e.g., 'tanh', 'relu', 'sigmoid'
 
-        # Loss Function Weights
-        self.drm_weight = kwargs.get('drm_weight', 1.0)
-        self.pinn_weight = kwargs.get('pinn_weight', 1.0)
-
         # Training Parameters
         self.num_epochs = kwargs.get('num_epochs', 5000)
         self.batch_size = kwargs.get('batch_size', 256)
         self.learning_rate = kwargs.get('learning_rate', 1e-3)
         self.optimizer_type = kwargs.get('optimizer_type', 'Adam')
-        self.lr_scheduler_type = kwargs.get('lr_scheduler_type', 'ExponentialLR')
+        self.lr_scheduler_type = kwargs.get('lr_scheduler_type', 'ReduceLROnPlateau')
         self.lr_decay_gamma = kwargs.get('lr_decay_gamma', 0.9)
         self.lr_step_milestones = kwargs.get('lr_step_milestones', [2000, 4000])
         self.lr_step_gamma = kwargs.get('lr_step_gamma', 0.1)
+        self.lr_patience = kwargs.get('lr_patience', 50)
+        self.lr_factor = kwargs.get('lr_factor', 0.5)
+        self.lr_min = kwargs.get('lr_min', 1e-6)
+        self.lr_patience_mode = kwargs.get('lr_patience_mode', 'min')
+
+        # Loss Function Weights
+        self.drm_weight = kwargs.get('drm_weight', 0.0)
+        self.pinn_weight = kwargs.get('pinn_weight', 1.0)
+        self.drm_steps_per_cycle = kwargs.get('drm_steps_per_cycle', 0)
+        self.pinn_steps_per_cycle = kwargs.get('pinn_steps_per_cycle', 0)
+        self.steps_per_cycle = self.drm_steps_per_cycle + self.pinn_steps_per_cycle
+        self.total_steps = self.num_epochs // self.steps_per_cycle
 
         # Sampling Parameters
         self.num_uniform_partition = kwargs.get('num_uniform_partition', 10000)
@@ -50,6 +58,7 @@ class PoissonSolverConfig:
 
         # Metric Logging for Fourier Coefficients
         self.log_fourier_coefficients = kwargs.get('log_fourier_coefficients', True)
+        self.use_sine_series = kwargs.get('use_sine_series', True)
         self.fourier_freq = kwargs.get('fourier_freq', [1, 4, 9]) # Array of frequencies to compute Fourier coefficients
 
         # Visualization parameters

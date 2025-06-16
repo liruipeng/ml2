@@ -29,6 +29,7 @@ class NNModel(nn.Module):
             raise ValueError("Activation must be a string or a list/tuple of strings.")
 
         layers = []
+
         prev_neurons = input_dim
         for i, num_neurons in enumerate(hidden_neurons):
             layers.append(nn.Linear(prev_neurons, num_neurons))
@@ -72,4 +73,4 @@ class NNModel(nn.Module):
         if self.g0_func is None or self.d_func is None:
             return raw_nn_output
         else:
-            return (1.0 - self.d_func(x)) * self.g0_func(x) + self.d_func(x) * raw_nn_output
+            return self.g0_func(x) + self.d_func(x) * raw_nn_output
