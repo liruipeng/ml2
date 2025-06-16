@@ -19,17 +19,39 @@ import matplotlib.pyplot as plt
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class NeuralBasis(nn.Module):
-    def __init__(self, dim_in=1, hidden=[4,4,4], n_base=4, activation=None):
+    def __init__(self, dim_in=1, hidden=[4,4,4], n_base=4, activation=None, fourier_feature=None):
         super().__init__()
         self.sigma = activation
+        self.fourier_feature = fourier_feature
+        if fourier_feature is not None:
+            m=100
+            dim_in = 2*m
+            sigma = 5
+            B1 = torch.rand(m, 1) * sigma
+            B2 = torch.rand(m, 1) * sigma
+            self.B1= nn.Parameter(B1, requires_grad=True)
+            self.B2 = nn.Parameter(B2, requires_grad=True)
+
         dim = [dim_in] + hidden + [n_base]
         self.layers = nn.ModuleList([nn.Linear(dim[i-1], dim[i]) for i in range(1, len(dim))])
 
     def forward(self, t):
+        t = self.get_fourier_feature(t)  # (B, J, 2M) if fourier_feature is not None else (B, J)
         for i in range(len(self.layers)-1):
             t = self.sigma(self.layers[i](t))
         # linear activation at the last layer
         return self.layers[-1](t)
+
+    def get_fourier_feature(self, xs):
+        _xs = xs # (B, 1)
+        if self.fourier_feature is not None:
+            Bxs = torch.einsum("BD, MD-> BM", _xs, self.B1)
+            sin_xs = torch.sin(Bxs)  # (B, J, M)
+            cos_xs = torch.cos(Bxs)  # (B, J, M)
+            feature = torch.cat([sin_xs, cos_xs], dim=-1)  # (B, J, 2M)
+            return feature
+        else: 
+            return xs
 
 def _inner_product(f1, f2, h):
     """    
@@ -77,16 +99,7 @@ class AdaFNN(nn.Module):
         # instantiate each basis node in the basis layer
 
         dim_in = 1
-        if fourier_feature is not None:
-            m=100
-            dim_in = 2*m
-            sigma = 5
-            B1 = torch.rand(m, 1) * sigma
-            B2 = torch.rand(m, 1) * sigma
-            self.B1= nn.Parameter(B1, requires_grad=True)
-            self.B2 = nn.Parameter(B2, requires_grad=True)
-
-        self.BL = NeuralBasis(dim_in=dim_in, hidden=base_hidden, n_base = n_base, activation=activation)
+        self.BL = NeuralBasis(dim_in=dim_in, hidden=base_hidden, n_base = n_base, activation=activation, fourier_feature=fourier_feature)
 
     def forward(self, xs, us):
         scores, basess = self.encode(xs, us)
@@ -120,19 +133,6 @@ class AdaFNN(nn.Module):
         basess = self.BL(xs.reshape(-1,1)).reshape(B,J,self.n_base) # (B, J, n_base)
         us_restore = torch.bmm(basess, scores.unsqueeze(-1)).squeeze(-1)  # (B, J, n_base) x (B, n_base, 1) -> (B, J, 1)
         return us_restore
-    
-    def get_bases(self, xs):
-        B, J = xs.size()
-        _xs = xs.unsqueeze(dim=-1)  # (B, J, 1)
-        if self.fourier_feature is not None:
-            Bxs = torch.einsum("BJD, MD-> BJM", _xs, self.B1)
-            sin_xs = torch.sin(Bxs)  # (B, J, M)
-            cos_xs = torch.cos(Bxs)  # (B, J, M)
-            feature = torch.cat([sin_xs, cos_xs], dim=-1)  # (B, J, 2M)
-            basess = self.BL(feature)
-        else: 
-            basess = self.BL(_xs)
-        return basess
 
     def get_bases_products(self, xs, basess, n_choice=None):
         hs = xs[:, 1:] - xs[:, :-1]# (B, J-1):  grid size
