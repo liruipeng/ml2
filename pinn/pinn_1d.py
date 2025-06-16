@@ -56,7 +56,10 @@ from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+import sys 
+sys.path.insert(0, '..')
 from SOAP.soap import SOAP
+from optim_dualcone.dcgd import DCGD
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
