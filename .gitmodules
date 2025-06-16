@@ -1,3 +1,6 @@
 [submodule "SOAP"]
 	path = SOAP
 	url = https://github.com/nikhilvyas/SOAP
+[submodule "optim_dualcone"]
+	path = optim_dualcone
+	url = https://github.com/youngsikhwang/Dual-Cone-Gradient-Descent
