@@ -174,7 +174,7 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
             For 1D: (min_val, max_val)
             For ND: ((min_x, max_x), (min_y, max_y), ...)
         d_type (str): Type of d(x) function.
-                      "quadratic_bubble" for a simple polynomial (default).Add commentMore actions
+                      "quadratic_bubble" for a simple polynomial (default).
                       "inf_smooth_bump" for a generalized C-infinity bump function (product of 1D bumps).
                       "abs_dist_complement" for 1D: 1 - sqrt(x_norm^2 + (1-x_norm)^2).
                       "ratio_bubble_dist" for 1D: x_norm*(1-x_norm) / sqrt(x_norm^2 + (1-x_norm)^2).
