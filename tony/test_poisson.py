@@ -224,8 +224,7 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
             mode=config.lr_patience_mode,
             factor=config.lr_factor,
             patience=config.lr_patience,
-            min_lr=config.lr_min,
-            verbose=True
+            min_lr=config.lr_min
         )
     else:
         lr_scheduler = None
