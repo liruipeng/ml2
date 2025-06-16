@@ -42,10 +42,23 @@ def _inner_product(f1, f2, h):
     prod = f1 * f2 # (B, J = len(h) + 1)
     return torch.matmul((prod[:-1] + prod[1:]), h)/2
 
+def _l1(f, h):
+    # f dimension : ( B bases, J )
+    B, J = f.size()
+    return _inner_product(torch.abs(f), torch.ones((B, J)), h)
+
+
+def _l2(f, h):
+    # f dimension : ( B bases, J )
+    # output dimension - ( B bases, 1 )
+    return torch.sqrt(_inner_product(f, f, h)) 
+
 class AdaFNN(nn.Module):
 
     def __init__(self, n_base=4, base_hidden=[64, 64, 64], activation=torch.nn.ReLU()):
         """
+        labda1      : penalty of L1 regularization, a positive real number
+        lambda2     : penalty of L2 regularization, a positive real number
         n_base      : number of basis nodes, integer
         base_hidden : hidden layers used in each basis node, array of integers
         grid        : observation time grid, array of sorted floats including 0.0 and 1.0
@@ -81,7 +94,6 @@ class AdaFNN(nn.Module):
         # evaluate the current basis nodes at time grid
         basess = self.BL(xs.reshape(-1,1)).reshape(B,self.n_base,J) # (B, n_base, J)
 
-
         scores = torch.vmap(torch.vmap(_inner_product, in_dims=(0, None, None)), in_dims=(0, 0, 0))(basess, us, hs)
         # (B, n_bases, J), (B, J), (B, J-1)
 
@@ -95,10 +107,53 @@ class AdaFNN(nn.Module):
         scores: (B, n_base) : B functions, encoded into n_base scores
         """
         B, J = xs.size()
+        
         basess = self.BL(xs.reshape(-1,1)).reshape(B,J,self.n_base) # (B, J, n_base)
         us_restore = torch.bmm(basess, scores.unsqueeze(-1)).squeeze(-1)  # (B, J, n_base) x (B, n_base, 1) -> (B, J, 1)
         return us_restore
 
+    def get_normalized(self, basess, hs, n_choice=None):
+        # Noramalization: compute each basis node's L2 norm normalize basis nodes
+        n_choice = n_choice if n_choice is not None else self.n_base
+        ids = np.random.choice(self.n_base, n_choice, replace=False)  # Randomly select n_choice basis nodes
+        _basess = basess[:, ids, :]  # (B, n_choice, J)
+        # Create scores matrix
+        # [<u1,u1>, <u1,u2>, ..., <u1,un>]
+        # [<u2,u1>, <u2,u2>, ..., <u2,un>]
+        # ...
+        # [<un,u1>, <un,u2>, ..., <un,un>
+        m_scores = torch.vmap(
+                    torch.vmap(
+                        torch.vmap(_inner_product,  # (J,), (J,), (J-1)
+                                       in_dims=(None, 0, None)), # (J,), (n_base,J), (J-1)
+                                       in_dims=(0, None, None)), # (n_base, J), (n_base, J), (J-1)
+                                       in_dims=(0, 0, 0))(_basess, _basess, hs) # (B, n_base, J), (B, n_base, J), (B, J-1)
+        
+        return m_scores
+    
+    def R1(self, l1_k):
+        """
+        L1 regularization
+        l1_k : number of basis nodes to regularize, integer        
+        """
+        # sample l1_k basis nodes to regularize
+        selected = np.random.choice(self.n_base, min(l1_k, self.n_base), replace=False)
+        selected_bases = torch.cat([self.normalized_bases[i] for i in selected], dim=0) # (k, J)
+        return torch.mean(_l1(selected_bases, self.h))
+
+    def R2(self, l2_pairs):
+        """
+        L2 regularization
+        l2_pairs : number of pairs to regularize, integer  
+        """
+        k = min(l2_pairs, self.n_base * (self.n_base - 1) // 2)
+        f1, f2 = [None] * k, [None] * k
+        for i in range(k):
+            a, b = np.random.choice(self.n_base, 2, replace=False)
+            f1[i], f2[i] = self.normalized_bases[a], self.normalized_bases[b]
+        return torch.mean(torch.abs(_inner_product(torch.cat(f1, dim=0),
+                                                                  torch.cat(f2, dim=0),
+                                                                  self.h)))
 """
 Data Generation
 """
@@ -168,6 +223,14 @@ def generate_data_poly_sin(high_freq:int, nx:int, n_batch:int)->torch.Tensor:
 """
 Training
 """
+def loss_fn(model, xs, us, l1_k:int=2, l2_pairs:int=3, lambda1:float=1., lambda2:float=1.):
+    us_restore = model(xs, us)
+    loss_res = F.mse_loss(us_restore, us)  # Mean squared error loss
+    loss_r1 = model.R1(l1_k=l1_k) if lambda1 !=0 else torch.zeros(1).to(model.deivce)  # Regularization term for L1
+    loss_r2 = model.R2(l2_pairs=l2_pairs) if lambda2 != 0 else torch.zeros(1).to(model.deivce)  # Regularization term
+    return loss_res + lambda1*loss_r1 + lambda2*loss_r2, (loss_res, loss_r1, loss_r2)
+    
+
 def train(model, nstep, optimizer, data_gen, scheduler=None):
     """
     Train the model for nstep steps.
@@ -184,7 +247,7 @@ def train(model, nstep, optimizer, data_gen, scheduler=None):
         # Forward pass
         us_restore = model(xs, us)
         # Compute loss (mean squared error)
-        loss = F.mse_loss(us_restore, us)
+        loss,_ = loss_fn(model, xs, us, l1_k=2, l2_pairs=3, lambda1=1.0, lambda2=1.0)
         # Backward pass
         loss.backward()
         optimizer.step()
