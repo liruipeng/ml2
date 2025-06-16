@@ -320,7 +320,7 @@ if __name__ == "__main__":
     """
     Model
     """
-    n_base = 15
+    n_base = 45
     # Create Function Autoencoder Model 
     model = AdaFNN(n_base=n_base, base_hidden=[256,256,256,256]).to(device)  # Change 'cpu' to 'cuda' if using GPU
     # Encode function into scores
