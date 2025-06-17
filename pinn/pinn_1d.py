@@ -351,7 +351,7 @@ class Loss:
         loss_d, loss_ds = self.drm_loss(model=model, mesh=mesh)
         # Combine losses
         loss = loss_p + loss_d
-        multi_loss = torch.tensor([*loss_ps, loss_ds[0]]).requires_grad_(True)
+        multi_loss = [*loss_ps, loss_ds[0]]
         return loss, multi_loss
     def loss(self, model, mesh):
         if self.type == -1:
@@ -369,10 +369,10 @@ class Loss:
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir, aggregator:str='None', monitor_aggregator:bool=False):
+          num_check, num_plots, sweep_idx, level_idx, frame_dir, aggregator:str='None', do_monitor_aggregator:bool=False):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     aggregator = None if aggregator == 'None' else get_aggregator(aggregator)
-    if (aggregator is not None) and (monitor_aggregator):
+    if (aggregator is not None) and (do_monitor_aggregator):
         monitor_aggregator(aggregator)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
@@ -494,7 +494,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, monitor_aggregator=args.monitor_aggregator)
+                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
