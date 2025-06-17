@@ -56,8 +56,8 @@ def parse_args(args=None):
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
-    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0],
-                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
+    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0,1,2],
+                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss. 1 for DRM loss, 2 for DCGD loss")
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
