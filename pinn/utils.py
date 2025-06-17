@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
 import shutil
+import torch
+from torch.nn.functional import cosine_similarity
 
 
 def cleanfiles(dir_name):
@@ -71,6 +73,7 @@ def parse_args(args=None):
                         help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
+    parser.add_argument('--aggregator', type=str, default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
 
     args = parser.parse_args(args)
 
@@ -146,3 +149,17 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
         video.write(img)
     video.release()
     print(f"  Video saved as {output_file_path}")
+
+def monitor_aggregator(aggregator):
+    def print_weights(_, __, weights: torch.Tensor) -> None:
+        """Prints the extracted weights."""
+        print(f"Weights: {weights}")
+
+    def print_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
+        """Prints the cosine similarity between the aggregation and the average gradient."""
+        matrix = inputs[0]
+        gd_output = matrix.mean(dim=0)
+        similarity = cosine_similarity(aggregation, gd_output, dim=0)
+        print(f"Cosine similarity: {similarity.item():.4f}")
+        aggregator.weighting.register_forward_hook(print_weights)
+        aggregator.register_forward_hook(print_gd_similarity)
