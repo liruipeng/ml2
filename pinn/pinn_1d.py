@@ -56,7 +56,9 @@ from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
-from SOAP.soap import SOAP
+#from SOAP.soap import SOAP
+from torchjd import mtl_backward
+from torchjd import aggregation as agg
 
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -291,7 +293,7 @@ class Loss:
         x = mesh.x_train
         u = model.get_solution(x)
         loss = loss_func(u, mesh.u_ex)
-        return loss
+        return loss, (loss,)
 
     # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
@@ -303,15 +305,15 @@ class Loss:
 
         # Internal loss
         pde = mesh.pde
-        loss = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
+        loss_pinn = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
         # Boundary loss
         if not model.enforce_bc:
             u_bc = u[[0, -1]]
             u_ex_bc = mesh.u_ex[[0, -1]]
             loss_b = loss_func(u_bc, u_ex_bc)
-            loss += self.bc_weight * loss_b
-
-        return loss
+            loss = loss_pinn + self.bc_weight * loss_b
+            return loss, (loss_pinn, loss_b)
+        return loss_pinn, (loss_pinn,)
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
@@ -329,17 +331,18 @@ class Loss:
         fu_prod = f_val * u
 
         integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
-        loss = torch.mean(integrand_values)
+        loss_drm = torch.mean(integrand_values)
 
-        # Boundary loss
-        u_bc = u[[0,-1]] 
-        u_ex_bc = mesh.u_ex[[0,-1]]
-        loss_b = self.loss_func(u_bc, u_ex_bc)
-        loss += self.bc_weight * loss_b
-
+        if not model.enforce_bc:
+            # Boundary loss
+            u_bc = u[[0,-1]] 
+            u_ex_bc = mesh.u_ex[[0,-1]]
+            loss_b = self.loss_func(u_bc, u_ex_bc)
+            loss = loss_drm + self.bc_weight * loss_b
+            return loss, (loss_drm, loss_b)
 
         xs.requires_grad_(False)  # Disable gradient tracking for x
-        return loss
+        return loss, (loss_drm,)
 
     def loss(self, model, mesh):
         if self.type == -1:
@@ -377,7 +380,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
 
         def closure():
             optimizer.zero_grad()
-            loss = criterion.loss(model=model, mesh=mesh)
+            loss, _ = criterion.loss(model=model, mesh=mesh)
             loss.backward()
             return loss
 
@@ -387,7 +390,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
             # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
             optimizer.zero_grad()
             # compute the loss value for the current batch of data
-            loss = criterion.loss(model=model, mesh=mesh)
+            loss, _ = criterion.loss(model=model, mesh=mesh)
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
             loss.backward()
