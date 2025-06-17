@@ -6,8 +6,11 @@ import cv2
 from pathlib import Path
 import shutil
 import torch
+import ast
 from torch.nn.functional import cosine_similarity
 from torchjd import aggregation as agg
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def cleanfiles(dir_name):
     dir_path = Path(dir_name)
@@ -73,7 +76,7 @@ def parse_args(args=None):
                         help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
-    parser.add_argument('--aggregator', type=str, default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
+    parser.add_argument('--aggregator', type=str, nargs='+', default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
 
     parser.add_argument('--monitor_aggregator', action='store_true', help="If set, monitor gradient. This need to set up aggregator")
 
@@ -153,7 +156,12 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     print(f"  Video saved as {output_file_path}")
 
 def get_aggregator(name: str):
-    return getattr(agg, name)()
+    if isinstance(name, str):
+        return getattr(agg, name)()
+    elif name[0]=="Constant":
+        return getattr(agg, name[0])(torch.tensor([ast.literal_eval(i) for i in name[1:]]).to(device))
+    else:
+        return getattr(agg, name[0])(*[ast.literal_eval(i) for i in name[1:]])
 
 def monitor_aggregator(aggregator):
     def print_weights(_, __, weights: torch.Tensor) -> None:
@@ -166,5 +174,5 @@ def monitor_aggregator(aggregator):
         gd_output = matrix.mean(dim=0)
         similarity = cosine_similarity(aggregation, gd_output, dim=0)
         print(f"Cosine similarity: {similarity.item():.4f}")
-        aggregator.weighting.register_forward_hook(print_weights)
-        aggregator.register_forward_hook(print_gd_similarity)
+    aggregator.weighting.register_forward_hook(print_weights)
+    aggregator.register_forward_hook(print_gd_similarity)
