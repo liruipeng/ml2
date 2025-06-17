@@ -357,7 +357,7 @@ class Loss:
         elif self.type == 2:
             loss_p, pinn_losses = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
             _, drm_losses = self.drm_loss(model=model, mesh=mesh)
-            loss_value = loss_p, [pinn_losses[0], drm_losses[0]]
+            loss_value = pinn_losses[0] + drm_losses[0], [pinn_losses[0], drm_losses[0]]
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
