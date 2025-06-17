@@ -285,6 +285,8 @@ class Loss:
             self.name = "PINN Loss"
         elif self.type == 1:
             self.name = "DRM Loss"
+        elif self.type== 2:
+            self.name = "DCGD(PINN+DRM) Loss"
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         self.bc_weight = bc_weight
@@ -352,6 +354,10 @@ class Loss:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 1: 
             loss_value = self.drm_loss(model=model, mesh=mesh)
+        elif self.type == 2:
+            loss_p, pinn_losses = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+            _, drm_losses = self.drm_loss(model=model, mesh=mesh)
+            loss_value = loss_p, [pinn_losses[0], drm_losses[0]]
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
@@ -360,8 +366,10 @@ class Loss:
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir):
+          num_check, num_plots, sweep_idx, level_idx, frame_dir, loss_type=0):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    if loss_type ==2: 
+        optimizer = DCGD(optimizer, 1, type="center")
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
     scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
@@ -391,12 +399,16 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
             # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
             optimizer.zero_grad()
             # compute the loss value for the current batch of data
-            loss,_ = criterion.loss(model=model, mesh=mesh)
+            loss, losses = criterion.loss(model=model, mesh=mesh)
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
-            loss.backward()
             # update the model param doing an optim step using the computed gradients and learning rate
-            optimizer.step()
+            if loss_type != 2:
+                loss.backward()
+                optimizer.step()
+            else:
+                # Dual Cone GD optimizer
+                optimizer.step(losses)
             #
             scheduler.step()
 
@@ -445,12 +457,13 @@ def main(args=None):
     # Input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
+    enforce_bc = args.enforce_bc if args.loss_type !=2 else True # Dual Cone GD enforces hard constarint on BC
     model = MultiLevelNN(mesh=mesh,
                          num_levels=args.levels,
                          dim_inputs=dim_inputs, dim_outputs=dim_outputs,
                          dim_hidden=args.hidden_dims,
                          act=get_activation(args.activation),
-                         enforce_bc=args.enforce_bc)
+                         enforce_bc=enforce_bc)
     print(model)
     model.to(device)
     # Plotting
