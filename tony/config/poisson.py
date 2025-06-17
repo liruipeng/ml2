@@ -23,6 +23,17 @@ class PoissonSolverConfig:
         # Neural Network Architecture
         self.hidden_neurons = kwargs.get('hidden_neurons', [20, 20, 20]) # Array of numbers of intermediate neurons
         self.activation = kwargs.get('activation', 'tanh') # e.g., 'tanh', 'relu', 'sigmoid'
+        self.bc_extension = kwargs.get('bc_extension', 'hermite_cubic_2nd_hermite')
+        self.distance = kwargs.get('distance', 'sin_half_period')
+        self.use_chebyshev_basis = False
+        self.chebyshev_freq_min = kwargs.get('chebyshev_freq_min', -1) # Minimum Chebyshev frequency
+        self.chebyshev_freq_max = kwargs.get('chebyshev_freq_max', -1) # Maximum Chebyshev frequency
+        if (1 <= self.chebyshev_freq_min <= self.chebyshev_freq_max):
+            if self.domain_dim != 1:
+                print("Warning: Chebyshev basis is only implemented for 1D problems. Turning False")
+            else:
+                print(f"Chebyshev basis of frequency {self.chebyshev_freq_min} to {self.chebyshev_freq_max} are used")
+                self.use_chebyshev_basis = True
 
         # Training Parameters
         self.num_epochs = kwargs.get('num_epochs', 5000)
@@ -70,9 +81,11 @@ class PoissonSolverConfig:
         config_dict = {}
         for key, value in self.__dict__.items():
             if not key.startswith('_'): # Exclude private/protected attributes
-                # Convert torch.device objects to string for JSON serialization
                 if key == 'device' and isinstance(value, torch.device):
                     config_dict[key] = str(value)
+                elif isinstance(value, tuple) and all(isinstance(v, tuple) for v in value):
+                    # Convert tuple of tuples to list of lists for JSON serialization
+                    config_dict[key] = [list(item) for item in value]
                 else:
                     config_dict[key] = value
         return config_dict

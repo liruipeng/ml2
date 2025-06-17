@@ -12,6 +12,7 @@ job_ts=`date +"%Y%m%d_%H%M%S"`
 source NN_PDE_venv/bin/activate
 
 #flux run -N1 -n 8 --verbose --exclusive python3 test_poisson.py --base_log_dir ${job_ts}_logs --base_model_save_dir ${job_ts}_models --case 2 --drm_weight 1.0 --pinn_weight 0.0 --num_uniform_partition 2048 --epochs 20000 --logging_freq 50 &> ${job_ts}_output.txt
-flux run -N1 -n 8 --verbose --exclusive python3 test_poisson.py --base_log_dir ${job_ts}_logs --base_model_save_dir ${job_ts}_models --case 5 --drm_steps_per_cycle 10000 --pinn_steps_per_cycle 10000 --num_uniform_partition 2048 --epochs 20000 --logging_freq 50 &> ${job_ts}_output.txt
+#flux run -N1 -n 8 --verbose --exclusive python3 test_poisson.py --base_log_dir ${job_ts}_logs --base_model_save_dir ${job_ts}_models --case 5 --drm_steps_per_cycle 10000 --pinn_steps_per_cycle 10000 --num_uniform_partition 2048 --epochs 20000 --logging_freq 50 &> ${job_ts}_output.txt
+flux run -N1 -n 8 --verbose --exclusive python3 test_poisson.py --base_log_dir ${job_ts}_logs --base_model_save_dir ${job_ts}_models --case 5 --drm_steps_per_cycle 10000 --pinn_steps_per_cycle 10000 --num_uniform_partition 2048 --epochs 20000 --logging_freq 50 --chebyshev_freq_min 1 --chebyshev_freq_max 10 --distance sin_half_period --bc_extension multilinear &> ${job_ts}_output.txt
 
 rsync -av --exclude 'config.json' --exclude 'plots_run*/' ${job_ts}_logs /p/lustre5/cheung26/scp_local

@@ -187,8 +187,8 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
 
     # PDE & Boundary Functions
     u_exact_func, f_exact_func = get_manufactured_solution(config.case_number, config.domain_dim)
-    g0_func = get_g0_func(u_exact_func, config.domain_dim, config.domain_bounds, "hermite_cubic_2nd_deriv")
-    d_func = get_d_func(config.domain_dim, config.domain_bounds, "ratio_bubble_dist")
+    g0_func = get_g0_func(u_exact_func, config.domain_dim, config.domain_bounds, config.bc_extension)
+    d_func = get_d_func(config.domain_dim, config.domain_bounds, config.distance)
 
     # Uniform grid
     full_uniform_grid_points = generate_uniform_grid_points(
@@ -204,7 +204,10 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
         hidden_neurons=config.hidden_neurons,
         activation=config.activation,
         g0_func=g0_func,
-        d_func=d_func
+        d_func=d_func,
+        use_chebyshev_basis=config.use_chebyshev_basis,
+        chebyshev_freq_min=config.chebyshev_freq_min, 
+        chebyshev_freq_max=config.chebyshev_freq_max
     ).to(config.device)
 
     # Optimizer and Learning Rate Scheduler
@@ -276,10 +279,14 @@ def run_experiment(config: PoissonSolverConfig, rank_val):
         optimizer.zero_grad()
 
         # Determine current step within the cycle
-        if config.steps_per_cycle > 0 and epoch > config.drm_steps_per_cycle / 2:
-            current_angle = 2 * np.pi / config.steps_per_cycle * (epoch - config.drm_steps_per_cycle)
-            current_drm_weight = 1 / (1 + np.exp(0.01 * config.steps_per_cycle * np.sin(current_angle)))
-            current_pinn_weight = 1.0 - current_drm_weight
+        if config.steps_per_cycle > 0:
+            if epoch > config.num_epochs - config.drm_steps_per_cycle / 2:
+                current_drm_weight = 0.0
+                current_pinn_weight = 1.0
+            elif epoch > config.drm_steps_per_cycle / 2:
+                current_angle = 2 * np.pi / config.steps_per_cycle * (epoch - config.drm_steps_per_cycle)
+                current_drm_weight = 1 / (1 + np.exp(0.01 * config.steps_per_cycle * np.sin(current_angle)))
+                current_pinn_weight = 1.0 - current_drm_weight
                 
         # Log the current weights
         logger.log_scalar('Weights/DRM_Weight', current_drm_weight, step=epoch)
@@ -357,8 +364,6 @@ if __name__ == "__main__":
                         help='Dimension of the Poisson problem (1, 2, or 3).')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Number of training epochs.')
-    parser.add_argument('--lr', type=float, default=1e-3,
-                        help='Learning rate for the optimizer.')
     parser.add_argument('--seed', type=int, default=42,
                         help='Base random seed for reproducibility; actual seed will be seed + rank.')
     parser.add_argument('--case', type=int, default=1,
@@ -367,8 +372,26 @@ if __name__ == "__main__":
     # Neural Network Architecture
     parser.add_argument('--hidden_neurons', type=int, nargs='+', default=[30, 30, 30],
                         help='List of integers for the number of neurons in each hidden layer.')
-    parser.add_argument('--activation', type=str, nargs='+', default=['tanh'],
+    parser.add_argument('--activation', type=str, nargs='+', default=['sin'],
                         help='Activation function(s). Can be a single string (e.g., "relu") or a list (e.g., "tanh" "relu").')
+    parser.add_argument('--bc_extension', type=str, default='hermite_cubic_2nd_deriv', 
+                        choices=['multilinear', 'hermite_cubic_2nd_deriv'],
+                        help='Boundary value extension function.')
+    parser.add_argument('--distance', type=str, default='sin_half_period', 
+                        choices=['quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', 'ratio_bubble_dist', 'sin_half_period'],
+                        help='Distance function.')
+    parser.add_argument('--chebyshev_freq_min', type=int, default=-1,
+                        help='Minimum frequency for Chebyshev polynomials.')
+    parser.add_argument('--chebyshev_freq_max', type=int, default=-1,
+                        help='Maximum frequency for Chebyshev polynomials.')
+
+    # Sampling parameters
+    parser.add_argument('--num_uniform_partition', type=int, default=64,
+                        help='Number of subintervals along each dimension for uniform partitioning.')
+    parser.add_argument('--batch_size', type=int, default=64,
+                        help='Number of points in each batch.')
+    
+    # Loss function
     parser.add_argument('--drm_weight', type=float, default=0.0,
                         help='Weight for the DRM loss term (used if drm_steps_per_cycle is 0).')
     parser.add_argument('--pinn_weight', type=float, default=1.0,
@@ -378,15 +401,11 @@ if __name__ == "__main__":
     parser.add_argument('--pinn_steps_per_cycle', type=int, default=0,
                         help='Number of epochs to train with PINN loss active in each cycle.')
 
-    # Sampling parameters
-    parser.add_argument('--num_uniform_partition', type=int, default=64,
-                        help='Number of subintervals along each dimension for uniform partitioning.')
-    parser.add_argument('--batch_size', type=int, default=64,
-                        help='Number of points in each batch.')
-    
     # Optimization
     parser.add_argument('--optimizer_type', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS'],
                         help='Type of optimizer to use (e.g., Adam, SGD, LBFGS).')
+    parser.add_argument('--lr', type=float, default=1e-3,
+                        help='Learning rate for the optimizer.')
     parser.add_argument('--lr_scheduler_type', type=str, default='ReduceLROnPlateau',
                         choices=['ExponentialLR', 'MultiStepLR', 'ReduceLROnPlateau', 'None'],
                         help='Type of learning rate scheduler.')
@@ -442,17 +461,21 @@ if __name__ == "__main__":
         'device': torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         'domain_dim': args.dim,
         'case_number': args.case,
+        'random_seed': args.seed,
         'hidden_neurons': args.hidden_neurons,
         'activation': parsed_activation,
+        'bc_extension': args.bc_extension,
+        'distance': args.distance,
+        'chebyshev_freq_min': args.chebyshev_freq_min,
+        'chebyshev_freq_max': args.chebyshev_freq_max,
         'drm_weight': args.drm_weight,
         'pinn_weight': args.pinn_weight,
         'drm_steps_per_cycle': args.drm_steps_per_cycle,
         'pinn_steps_per_cycle': args.pinn_steps_per_cycle,
-        'num_epochs': args.epochs,
-        'learning_rate': args.lr,
         'num_uniform_partition': args.num_uniform_partition,
         'batch_size': args.batch_size,
-        'random_seed': args.seed,
+        'num_epochs': args.epochs,
+        'learning_rate': args.lr,
         'optimizer_type': args.optimizer_type,
         'lr_scheduler_type': args.lr_scheduler_type,
         'lr_decay_gamma': args.lr_decay_gamma,
