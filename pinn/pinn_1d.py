@@ -55,7 +55,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, get_aggregator, monitor_aggregator  
 #from SOAP.soap import SOAP
 import torchjd
 from torchjd import aggregation as agg
@@ -295,7 +295,7 @@ class Loss:
         x = mesh.x_train
         u = model.get_solution(x)
         loss = loss_func(u, mesh.u_ex)
-        return loss, (loss,)
+        return loss, [loss,]
 
     # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
@@ -314,8 +314,8 @@ class Loss:
             u_ex_bc = mesh.u_ex[[0, -1]]
             loss_b = loss_func(u_bc, u_ex_bc)
             loss = loss_pinn + self.bc_weight * loss_b
-            return loss, (loss_pinn, loss_b)
-        return loss_pinn, (loss_pinn,)
+            return loss, [loss_pinn, loss_b]
+        return loss_pinn, [loss_pinn,]
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
@@ -341,18 +341,18 @@ class Loss:
             u_ex_bc = mesh.u_ex[[0,-1]]
             loss_b = self.loss_func(u_bc, u_ex_bc)
             loss = loss_drm + self.bc_weight * loss_b
-            return loss, (loss_drm, loss_b)
+            return loss, [loss_drm, loss_b]
 
-        xs.requires_grad_(False)  # Disable gradient tracking for x
-        return loss, (loss_drm,)
-    
+        #xs.requires_grad_(False)  # Disable gradient tracking for x
+        return loss_drm, [loss_drm,]
     def drmpinn_loss(self, model, mesh):
         """Combined Deep Ritz Method and PINN loss"""
         loss_p, loss_ps = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         loss_d, loss_ds = self.drm_loss(model=model, mesh=mesh)
         # Combine losses
-        loss_value = (loss_p + loss_d, [*loss_ps, loss_ds[0]])
-        return loss_value
+        loss = loss_p + loss_d
+        multi_loss = torch.tensor([*loss_ps, loss_ds[0]]).requires_grad_(True)
+        return loss, multi_loss
     def loss(self, model, mesh):
         if self.type == -1:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
@@ -366,15 +366,14 @@ class Loss:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
 
-def get_aggregator(name: str):
-    if 
-
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir, aggregator:str=None):
+          num_check, num_plots, sweep_idx, level_idx, frame_dir, aggregator:str='None', monitor_aggregator:bool=False):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    aggragator = None if aggregator is None else agg.get_aggregator(aggregator)
+    aggregator = None if aggregator == 'None' else get_aggregator(aggregator)
+    if (aggregator is not None) and (monitor_aggregator):
+        monitor_aggregator(aggregator)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
     scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
@@ -407,10 +406,10 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
             loss, multiloss = criterion.loss(model=model, mesh=mesh)
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
-            if aggragator is None:
+            if aggregator is None:
                 loss.backward()
             else: 
-                torchjd.backward(multiloss, aggregator=aggragator,)
+                torchjd.backward(multiloss, aggregator=aggregator,)
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
@@ -495,7 +494,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggragator=args.aggregator)
+                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, monitor_aggregator=args.monitor_aggregator)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",

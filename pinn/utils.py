@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 import torch
 from torch.nn.functional import cosine_similarity
-
+from torchjd import aggregation as agg
 
 def cleanfiles(dir_name):
     dir_path = Path(dir_name)
@@ -58,8 +58,8 @@ def parse_args(args=None):
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
-    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1],
-                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
+    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1, 2],
+                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss. 1 for DRM, 2 for DRN+PINN")
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
@@ -74,6 +74,8 @@ def parse_args(args=None):
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
     parser.add_argument('--aggregator', type=str, default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
+
+    parser.add_argument('--monitor_aggregator', action='store_true', help="If set, monitor gradient. This need to set up aggregator")
 
     args = parser.parse_args(args)
 
@@ -149,6 +151,9 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
         video.write(img)
     video.release()
     print(f"  Video saved as {output_file_path}")
+
+def get_aggregator(name: str):
+    return getattr(agg, name)
 
 def monitor_aggregator(aggregator):
     def print_weights(_, __, weights: torch.Tensor) -> None:
