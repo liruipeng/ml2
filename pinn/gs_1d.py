@@ -1,3 +1,16 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+# ---
+
+# %%
 import numpy as np
 import scipy.linalg
 from scipy.sparse import diags
@@ -5,19 +18,23 @@ import matplotlib.pyplot as plt
 import sys
 
 
+# %% [markdown]
 # 1D model problem: -u_xx = f
 # with homogeneous boundary conditions (BC).
 
+# %%
 # Source term
 def f(x, k):
     return k * k * np.pi * np.pi * np.sin(k * np.pi * x)
 
 
+# %%
 # Exact solution
 def u_ex(x, k):
     return np.sin(k * np.pi * x)
 
 
+# %%
 def gen_linsys(nx, dx, u, f_arr):
     diag_a = -np.ones(nx)
     diag_c = 2 * np.ones(nx)
@@ -35,6 +52,7 @@ def gen_linsys(nx, dx, u, f_arr):
     return mat_a, f_arr
 
 
+# %%
 def main():
     maxiter = 8
     check_freq = 2
@@ -89,7 +107,8 @@ def main():
     return 0
 
 
+# %%
 if __name__ == "__main__":
     err = main()
     plt.show()
-    sys.exit(err)
+    # sys.exit(err)
