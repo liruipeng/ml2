@@ -1,3 +1,16 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+# ---
+
+# %%
 """
 1D PINN model to solve the problem:
             -u_xx + r*u = f
@@ -16,8 +29,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 
+# %% [markdown]
 # torch.set_default_dtype(torch.float64)
 
+# %%
 if torch.cuda.is_available():
     dev = "cuda:0"
 else:
@@ -25,6 +40,7 @@ else:
 device = torch.device(dev)
 
 
+# %%
 class ProbParam:
     def __init__(self):
         self.problem = None
@@ -40,9 +56,11 @@ class ProbParam:
             self.np_dtype = np.float32
 
 
+# %%
 prob = ProbParam()
 
 
+# %%
 class PINN(nn.Module):
     def __init__(self, dim_inputs, dim_outputs, dim_hidden: list,
                  num_lev,
@@ -104,6 +122,7 @@ class PINN(nn.Module):
     #        torch.nn.init.xavier_uniform(m.weight)  #
 
 
+# %%
 class Mesh:
     def __init__(self, ntrain, neval, ax, bx):
         self.ntrain = ntrain
@@ -118,12 +137,14 @@ class Mesh:
         self.x_eval = torch.tensor(x_eval_np, requires_grad=False).to(device)
 
 
+# %%
 # Source term
 def f1(x):
     y = (4 - 16 * x ** 2) * torch.exp(-2 * x ** 2)
     return y
 
 
+# %%
 def f2(x):
     lw = len(prob.w)
     r = prob.r
@@ -135,6 +156,7 @@ def f2(x):
     return y
 
 
+# %%
 def f(x):
     if prob.problem == 1:
         return f1(x)
@@ -142,11 +164,13 @@ def f(x):
         return f2(x)
 
 
+# %%
 def u_ex1(x):
     y = torch.exp(-2 * x ** 2) + 1 / 2
     return y
 
 
+# %%
 # Exact solution
 def u_ex2(x):
     lw = len(prob.w)
@@ -158,6 +182,7 @@ def u_ex2(x):
     return y
 
 
+# %%
 def u_ex(x):
     if prob.problem == 1:
         return u_ex1(x)
@@ -165,6 +190,7 @@ def u_ex(x):
         return u_ex2(x)
 
 
+# %%
 def pinn_loss_fo(model, mesh):
     x = mesh.x_train
     x_bc = mesh.x_train_bc
@@ -203,6 +229,7 @@ def pinn_loss_fo(model, mesh):
     return loss
 
 
+# %%
 # Define the loss function for the PINN
 class Loss:
     def __init__(self, model, mesh, t):
@@ -219,6 +246,7 @@ class Loss:
         return loss
 
 
+# %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plots):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -280,6 +308,7 @@ def train(model, mesh, criterion, iterations, learning_rate, num_check, num_plot
         # ax2[i].set_yscale('symlog')
 
 
+# %%
 def main():
     torch.manual_seed(0)
     eval_resolution = 256
@@ -316,6 +345,7 @@ def main():
     return 0
 
 
+# %%
 if __name__ == "__main__":
     err = main()
     plt.show()
