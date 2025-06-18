@@ -273,6 +273,8 @@ class Loss:
             self.name = "Super Loss"
         elif self.type == 0:
             self.name = "PINN Loss"
+        elif self.type == 1:
+            self.name = "DRM Loss"
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         self.bc_weight = bc_weight
@@ -304,11 +306,41 @@ class Loss:
 
         return loss
 
+    def drm_loss(self, model, mesh: Mesh):
+        """Deep Ritz Method loss"""
+        xs = mesh.x_train.requires_grad_(True)
+        u = model(xs)
+
+        grad_u_pred = torch.autograd.grad(u, xs, 
+                                        grad_outputs=torch.ones_like(u), 
+                                        create_graph=True)[0]
+        
+        u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
+        grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
+
+        f_val = mesh.pde.f(xs)
+        fu_prod = f_val * u
+
+        integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
+        loss = torch.mean(integrand_values)
+
+        # Boundary loss
+        u_bc = u[[0,-1]] 
+        u_ex_bc = mesh.u_ex[[0,-1]]
+        loss_b = self.loss_func(u_bc, u_ex_bc)
+        loss += self.bc_weight * loss_b
+
+
+        xs.requires_grad_(False)  # Disable gradient tracking for x
+        return loss
+
     def loss(self, model, mesh):
         if self.type == -1:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+        elif self.type == 1: 
+            loss_value = self.drm_loss(model=model, mesh=mesh)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
