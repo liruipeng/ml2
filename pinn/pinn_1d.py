@@ -49,14 +49,14 @@ from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis
-from SOAP.soap import SOAP
+#from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 # Define PDE
 class PDE:
-    def __init__(self, high=None, mu=70, r=0, problem=1):
+    def __init__(self, high=None, mu=70, r=0, problem=1, device=device):
         # omega = [high]
         omega = list(range(1, high + 1, 2))
         # omega += [i + 50 for i in omega]
@@ -64,8 +64,8 @@ class PDE:
         # omega = [2**i for i in range(high.bit_length()) if 2**i <= high]
         coeff = [1] * len(omega)
 
-        self.w = omega
-        self.c = coeff
+        self.w = torch.asarray(omega, device=device)
+        self.c = torch.asarray(coeff, device=device)
         self.mu = mu
         self.r = r
         if problem == 1:
@@ -76,11 +76,24 @@ class PDE:
             self.u_ex = self.u_ex_2
 
     # Source term
+    @staticmethod
+    def sin_series(w:float, c:float, x:float, r:float)->float:
+        """
+        return c  (4 w^2  \pi^2 + r)  \sin(2 w  \pi  x)$
+        """
+        pi_w = 2*w*torch.pi
+        sin_term = c * (pi_w ** 2 + r) * torch.sin(pi_w * x)
+        return sin_term
     def f_1(self, x):
+        """
+        x: shape (nx, 1)
+        """
         y = torch.zeros_like(x)
-        for w, c in zip(self.w, self.c):
-            pi_w = 2 * torch.pi * w
-            y += c * (pi_w ** 2 + self.r) * torch.sin(pi_w * x)
+        #for w, c in zip(self.w, self.c):
+        #    pi_w = 2 * torch.pi * w
+        #    y += c * (pi_w ** 2 + self.r) * torch.sin(pi_w * x)
+        sin_terms = torch.func.vmap(self.sin_series, in_dims=(0,0,None,None))(self.w, self.c, x, self.r)
+        y = torch.sum(sin_terms, dim=0)
         return y
 
     def f_2(self, x):
