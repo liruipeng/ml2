@@ -80,6 +80,8 @@ class PDE:
     def sin_series(w:float, c:float, x:float, r:float)->float:
         """
         return c  (4 w^2  \pi^2 + r)  \sin(2 w  \pi  x)$
+        x: shape (nx,) or scalar 
+        return: shape (nx,) or scalar
         """
         pi_w = 2*w*torch.pi
         sin_term = c * (pi_w ** 2 + r) * torch.sin(pi_w * x)
