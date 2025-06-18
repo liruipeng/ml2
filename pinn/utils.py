@@ -142,7 +142,7 @@ def save_frame(x, t, y, xs, ys, iteration, title, frame_dir):
         ax.scatter(xs, ys, color="red", label="Sample training points")
     ax.set_title(title)
     ax.legend(loc='upper right')
-    iters_str = "_".join(f"{i:04d}" for i in iteration)
+    iters_str = "_".join(f"{i:08d}" for i in iteration)
     frame_path = os.path.join(frame_dir, f"{title}_{iters_str}.png")
     fig.savefig(frame_path)
     plt.close(fig)
