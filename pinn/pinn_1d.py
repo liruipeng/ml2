@@ -15,13 +15,6 @@
 # ---
 
 # %% [markdown]
-# ```
-# jupytext --set-formats ipynb,py pinn_1d.py
-# jupytext --sync pinn_1d.py
-# jupytext --sync pinn_1d.ipynb
-# ```
-
-# %% [markdown]
 # ### 1D PDE problem:
 #
 # $-u_{xx} + \gamma u = f$
@@ -31,11 +24,11 @@
 # #### Problem 1
 # The analytical solution is
 #
-# $u(x) = \sum_k c_k  \sin(w_k  \pi  x)$
+# $u(x) = \sum_k c_k  \sin(2 w_k  \pi  x)$
 #
 # and
 #
-# $f = \sum_k c_k  (w_k^2  \pi^2 + \gamma)  \sin(w_k  \pi  x)$
+# $f = \sum_k c_k  (4 w_k^2  \pi^2 + \gamma)  \sin(2 w_k  \pi  x)$
 #
 # #### Problem 2 (from [MscaleDNN](https://arxiv.org/abs/2007.11207))
 # The analytical solution is
@@ -65,7 +58,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class PDE:
     def __init__(self, high=None, mu=70, r=0, problem=1):
         # omega = [high]
-        omega = list(range(1, high + 1))
+        omega = list(range(1, high + 1, 2))
+        # omega += [i + 50 for i in omega]
         # omega = list(range(2, high + 1, 2))
         # omega = [2**i for i in range(high.bit_length()) if 2**i <= high]
         coeff = [1] * len(omega)
@@ -85,7 +79,7 @@ class PDE:
     def f_1(self, x):
         y = torch.zeros_like(x)
         for w, c in zip(self.w, self.c):
-            pi_w = torch.pi * w
+            pi_w = 2 * torch.pi * w
             y += c * (pi_w ** 2 + self.r) * torch.sin(pi_w * x)
         return y
 
@@ -100,7 +94,7 @@ class PDE:
     def u_ex_1(self, x):
         y = torch.zeros_like(x)
         for w, c in zip(self.w, self.c):
-            y += c * torch.sin(w * torch.pi * x)
+            y += c * torch.sin(2 * w * torch.pi * x)
         return y
 
     def u_ex_2(self, x):
@@ -115,8 +109,8 @@ class Mesh:
         self.ax = ax
         self.bx = bx
         # training sample points (excluding the two points on the boundaries)
-        self.x_train = torch.linspace(self.ax, self.bx, self.ntrain, device=device).unsqueeze(-1)
-        self.x_eval = torch.linspace(self.ax, self.bx, self.neval, device=device).unsqueeze(-1)
+        self.x_train = torch.linspace(self.ax, self.bx, self.ntrain + 1, device=device)[:-1].unsqueeze(-1)
+        self.x_eval = torch.linspace(self.ax, self.bx, self.neval + 1, device=device)[:-1].unsqueeze(-1)
         self.pde = None
         self.f = None
         self.u_ex = None
@@ -333,6 +327,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
+    _, uf_analytic, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic))
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
@@ -379,16 +374,13 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
-                xf_eval, uf_eval = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval))
-                xf_analytic, uf_analytic = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic))
-                save_frame(x=xf_eval, t=uf_analytic, y=uf_eval,
-                           xs=None,  ys=None,
-                           iteration=[sweep_idx, level_idx, i], title="Model_feq_Outputs", frame_dir=frame_dir)
+                xf_eval, uf_eval, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval))
+                save_frame(x=xf_eval, t=uf_analytic, y=uf_eval, xs=None,  ys=None,
+                           iteration=[sweep_idx, level_idx, i], title="Model_Frequencies", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
                            iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
-                save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error),
-                           xs=None, ys=None,
+                save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error), xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
             model.train()
 
@@ -454,6 +446,8 @@ def main(args=None):
                                output_file="Solution.mp4")
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Errors",
                                output_file="Errors.mp4")
+        make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Frequencies",
+                               output_file="Frequencies.mp4")
     return 0
 
 # %%

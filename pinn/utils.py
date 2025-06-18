@@ -1,3 +1,16 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+# ---
+
+# %%
 import os
 import argparse
 import torch.nn as nn
@@ -5,10 +18,11 @@ import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
 import shutil
-from scipy.fft import fft, fftfreq
+from scipy.fft import rfft, rfftfreq
 import numpy as np
 
 
+# %%
 def cleanfiles(dir_name):
     dir_path = Path(dir_name)
     if dir_path.exists() and dir_path.is_dir():
@@ -18,6 +32,7 @@ def cleanfiles(dir_name):
             # elif item.is_dir():
             #    shutil.rmtree(item)
 
+# %%
 def is_notebook():
     try:
         from IPython import get_ipython
@@ -25,6 +40,7 @@ def is_notebook():
     except:
         return False
 
+# %%
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Train a PINN model.")
 
@@ -40,7 +56,7 @@ def parse_args(args=None):
                         help="Number of training epochs per sweep.")
     parser.add_argument('--adam_epochs', type=int, default=None,
                         help="Number of training epochs using Adam per sweep. Defaults to --epochs if not set.")
-    parser.add_argument('--sweeps', type=int, default=3,
+    parser.add_argument('--sweeps', type=int, default=2,
                         help="Number of multilevel outer sweeps.")
     parser.add_argument('--hidden_dims', type=int, nargs='+', default=[64, 64],
                         help="List of hidden layer dimensions (e.g., --hidden_dims 64 64)")
@@ -48,7 +64,7 @@ def parse_args(args=None):
                         help="Lower bound of the 1D domain.")
     parser.add_argument('--bx', type=float, default=1.0,
                         help="Upper bound of the 1D domain.")
-    parser.add_argument('--high_freq', type=int, default=16,
+    parser.add_argument('--high_freq', type=int, default=8,
                         help="Highest frequency used in the PDE solution (PDE 1).")
     parser.add_argument('--gamma', type=float, default=0,
                         help="Coefficient \gamma in the PDE: -u_xx + \gamma u = f.")
@@ -82,12 +98,14 @@ def parse_args(args=None):
 
     return args
 
+# %%
 def print_args(args):
     print("Options used:")
     for key, value in vars(args).items():
         print(f"   --{key}: {value}")
 
 
+# %%
 def get_activation(name: str):
     name = name.lower()
     activations = {
@@ -101,6 +119,7 @@ def get_activation(name: str):
         raise ValueError(f"Unknown activation function: {name}")
     return activations[name]()
 
+# %%
 def save_frame(x, t, y, xs, ys, iteration, title, frame_dir):
     """_summary_
 
@@ -129,6 +148,7 @@ def save_frame(x, t, y, xs, ys, iteration, title, frame_dir):
     plt.close(fig)
 
 
+# %%
 def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     frame_paths = sorted([
         os.path.join(frame_dir, fname)
@@ -149,14 +169,33 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     video.release()
     print(f"  Video saved as {output_file_path}")
 
+
+# %%
 def fourier_analysis(x, y):
     """
-    Plot absolute value of cosine coefficients of the Fourier series
+    Compute the magnitude spectrum using the Fast Fourier Transform (FFT).
     Ref: https://docs.scipy.org/doc/scipy/tutorial/fft.html
     """
+    x = x.flatten()
+    y = y.flatten()
+
+    if not np.isrealobj(y):
+        raise ValueError("Input y must be real for rfft.")
+
+    # Check uniform sampling
+    dx = np.diff(x.flatten())
+    if not np.allclose(dx, dx[0], rtol=1e-5, atol=1e-7):
+        raise ValueError("x must be uniformly sampled.")
+
     N = len(x)
-    T = x[1] - x[0]
-    yf = fft(y)
-    xf = fftfreq(N, T)[:N//2]
-    y_plot = 2.0/N * np.abs(yf[0:N//2])
-    return xf, y_plot
+    # Sampling interval
+    Ts = dx[0]
+    yf = rfft(y)
+    xf = rfftfreq(N, Ts)
+    yf *= 2.0 / N
+    # Correct scaling for DC and Nyquist (they should not be doubled)
+    yf[0] /= 2
+    if N % 2 == 0:
+        yf[-1] /= 2
+
+    return xf, np.abs(yf), np.real(yf), -np.imag(yf)
