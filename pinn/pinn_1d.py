@@ -88,13 +88,13 @@ class PDE:
         return sin_term
     def f_1(self, x):
         """
-        x: shape (nx, 1)
+        x: shape (nx)
         """
         y = torch.zeros_like(x)
         #for w, c in zip(self.w, self.c):
         #    pi_w = 2 * torch.pi * w
         #    y += c * (pi_w ** 2 + self.r) * torch.sin(pi_w * x)
-        sin_terms = torch.func.vmap(self.sin_series, in_dims=(0,0,None,None))(self.w, self.c, x, self.r)
+        sin_terms = torch.func.vmap(self.sin_series, in_dims=(0,0,None,None))(self.w, self.c, x, self.r) # shape (len(w), nx)
         y = torch.sum(sin_terms, dim=0)
         return y
 
