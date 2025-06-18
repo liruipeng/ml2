@@ -13,6 +13,7 @@
 # %%
 import os
 import argparse
+import inspect
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import cv2
@@ -103,12 +104,22 @@ def parse_args(args=None):
 
     return args
 
+def str2arg(str_info:str):
+    """
+    Convert string to argument with ast.literal_eval. Noted that 'min' functions can cause `ValueError: malformed node or string on`. This return original string if conversion fails.
+    """
+    try: 
+        arg = ast.literal_eval(str_info)
+    except (ValueError):
+        arg = str_info 
+    return arg
+
 def get_scheduler_gen(args):
     """
     Return scheduler by argument
     """
     scheduler_name = args.scheduler 
-    scheduler_kargs = {k: ast.literal_eval(v) for k, v in zip(args.scheduler_config[::2], args.scheduler_config[1::2])}
+    scheduler_kargs = {k: str2arg(v) for k, v in zip(args.scheduler_config[::2], args.scheduler_config[1::2])}
     scheduler_attr = getattr(torch.optim.lr_scheduler, scheduler_name) 
     def scheduler_gen(optimizer:torch.optim)->torch.optim.lr_scheduler:
         """
@@ -118,6 +129,18 @@ def get_scheduler_gen(args):
         """
         return scheduler_attr(optimizer, **scheduler_kargs)
     return scheduler_gen
+
+def scheduler_step(scheduler, loss, epoch=None):
+    """
+    Wrapper function for step the learning rate scheduler.
+    """
+    func_args = inspect.getfullargspec(scheduler.step).args
+    if "metrics" in func_args: # ReduceLROnPlateau scheduler requires metrics on stepping
+        scheduler.step(metrics=loss, epoch=epoch)
+    else:
+        # Otherwise, call step without metrics
+        scheduler.step(epoch=epoch)
+
 # %%
 def print_args(args):
     print("Options used:")

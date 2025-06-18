@@ -48,8 +48,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_gen
-from SOAP.soap import SOAP
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_gen, scheduler_step
+#from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -387,7 +387,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
-            scheduler.step()
+            scheduler_step(scheduler, loss)
 
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
             model.eval()
