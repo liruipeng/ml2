@@ -20,6 +20,8 @@ from pathlib import Path
 import shutil
 from scipy.fft import rfft, rfftfreq
 import numpy as np
+import torch
+import ast
 
 
 # %%
@@ -89,6 +91,9 @@ def parse_args(args=None):
                         help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
+    parser.add_argument("--scheduler", type=str, default="StepLR", help="Learning rate scheduler to use. View https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers")
+    parser.add_argument("--scheduler_config", type=str, nargs='+', default=["step_size", "1000", "gamma", "0.9"], help="Configuration for learing rate scheduler. Follow https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers. The setting is correspoinding to `--scheduler` setting.")
+    
 
     args = parser.parse_args(args)
 
@@ -98,6 +103,21 @@ def parse_args(args=None):
 
     return args
 
+def get_scheduler_gen(args):
+    """
+    Return scheduler by argument
+    """
+    scheduler_name = args.scheduler 
+    scheduler_kargs = {k: ast.literal_eval(v) for k, v in zip(args.scheduler_config[::2], args.scheduler_config[1::2])}
+    scheduler_attr = getattr(torch.optim.lr_scheduler, scheduler_name) 
+    def scheduler_gen(optimizer:torch.optim)->torch.optim.lr_scheduler:
+        """
+        Return scheduler generator by argument
+        Args:
+            optimizer (torch.optim): Optimizer to attach the scheduler to.
+        """
+        return scheduler_attr(optimizer, **scheduler_kargs)
+    return scheduler_gen
 # %%
 def print_args(args):
     print("Options used:")

@@ -48,7 +48,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_gen
 from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -348,12 +348,11 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir):
+def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx, level_idx, frame_dir, scheduler_gen):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
-    scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
+    scheduler = scheduler_gen(optimizer)
     use_lbfgs = False
 
     def to_np(t): return t.detach().cpu().numpy()
@@ -430,6 +429,7 @@ def main(args=None):
     # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
     loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
     print(f"Using loss: {loss.name}")
+    scheduler_gen = get_scheduler_gen(args) # scheduler gen takes optimizer to return scheduler
     # 1-D mesh
     mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
@@ -471,7 +471,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir)
+                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
