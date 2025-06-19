@@ -15,7 +15,6 @@ import numpy as np
 import scipy.linalg
 from scipy.sparse import diags
 import matplotlib.pyplot as plt
-import sys
 
 
 # %% [markdown]

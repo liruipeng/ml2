@@ -316,7 +316,7 @@ def main():
     # number of point for training
     nx = 128
     prob.problem = 2
-    prob.w = [4]#[1, 2, 4, 8, 16]
+    prob.w = [4]  # [1, 2, 4, 8, 16]
     prob.c = [1., 1., 1., 1., 1.]
     prob.r = 0
     num_check = 100

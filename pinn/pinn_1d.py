@@ -45,13 +45,14 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from SOAP.soap import SOAP
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
+from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+# from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 # %%
 # Define PDE
@@ -100,6 +101,7 @@ class PDE:
     def u_ex_2(self, x):
         return torch.exp(-x**2) * torch.sin(self.mu * x ** 2)
 
+
 # %%
 # Define mesh
 class Mesh:
@@ -121,6 +123,7 @@ class Mesh:
         self.f = pde.f(self.x_train)
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
+
 
 # %%
 # Define one level NN
@@ -149,12 +152,14 @@ class Level(nn.Module):
                 x = self.act(x)
         return x
 
+
 # %%
 # Define level status
 class LevelStatus(Enum):
     OFF = "off"
     TRAIN = "train"
     FROZEN = "frozen"
+
 
 # %%
 # Define multilevel NN
@@ -235,7 +240,7 @@ class MultiLevelNN(nn.Module):
             return torch.zeros((x.shape[0], self.dim_outputs), device=x.device)
         # Concatenate along the column (feature) dimension
         out = torch.cat(ys, dim=1)
-        assert(out.shape[1] == self.num_active_levels() * self.dim_outputs)
+        assert out.shape[1] == self.num_active_levels() * self.dim_outputs
         return out
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
@@ -325,10 +330,11 @@ class Loss:
         loss = torch.mean(integrand_values)
 
         # Boundary loss
-        u_bc = u[[0,-1]]
-        u_ex_bc = mesh.u_ex[[0,-1]]
+        u_bc = u[[0, -1]]
+        u_ex_bc = mesh.u_ex[[0, -1]]
         loss_b = self.loss_func(u_bc, u_ex_bc)
         loss += self.bc_weight * loss_b
+
 
         xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
@@ -415,6 +421,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
             model.train()
 
+
 # %%
 # Define the main function
 def main(args=None):
@@ -456,23 +463,23 @@ def main(args=None):
     for i in range(args.sweeps):
         print("\nTraining Sweep", i)
         # train each level at a time
-        for l in range(args.levels):
+        for lev in range(args.levels):
             # Turn all levels to "frozen" if they are not off
             for k in range(args.levels):
                 if model.get_status(level_idx=k) != LevelStatus.OFF:
                     model.set_status(level_idx=k, status=LevelStatus.FROZEN)
             # Turn level l to "train"
-            model.set_status(level_idx=l, status=LevelStatus.TRAIN)
-            print("\nTraining Level", l)
+            model.set_status(level_idx=lev, status=LevelStatus.TRAIN)
+            print("\nTraining Level", lev)
             model.print_status()
             # set scale
-            scale = l + 1
-            model.set_scale(level_idx=l, scale=scale)
+            scale = lev + 1
+            model.set_scale(level_idx=lev, scale=scale)
             # Crank that !@#$ up
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
+                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
@@ -482,6 +489,7 @@ def main(args=None):
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Frequencies",
                                output_file="Frequencies.mp4")
     return 0
+
 
 # %%
 # can run it like normal: python filename.py
