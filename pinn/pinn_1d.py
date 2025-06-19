@@ -48,7 +48,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_gen, scheduler_step
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
 from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -311,10 +311,10 @@ class Loss:
         xs = mesh.x_train.requires_grad_(True)
         u = model(xs)
 
-        grad_u_pred = torch.autograd.grad(u, xs, 
-                                        grad_outputs=torch.ones_like(u), 
-                                        create_graph=True)[0]
-        
+        grad_u_pred = torch.autograd.grad(u, xs,
+                                          grad_outputs=torch.ones_like(u),
+                                          create_graph=True)[0]
+
         u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
 
@@ -325,11 +325,10 @@ class Loss:
         loss = torch.mean(integrand_values)
 
         # Boundary loss
-        u_bc = u[[0,-1]] 
+        u_bc = u[[0,-1]]
         u_ex_bc = mesh.u_ex[[0,-1]]
         loss_b = self.loss_func(u_bc, u_ex_bc)
         loss += self.bc_weight * loss_b
-
 
         xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
@@ -339,7 +338,7 @@ class Loss:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
-        elif self.type == 1: 
+        elif self.type == 1:
             loss_value = self.drm_loss(model=model, mesh=mesh)
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
@@ -348,7 +347,8 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx, level_idx, frame_dir, scheduler_gen):
+def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
+          level_idx, frame_dir, scheduler_gen):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
@@ -429,7 +429,8 @@ def main(args=None):
     # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
     loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
     print(f"Using loss: {loss.name}")
-    scheduler_gen = get_scheduler_gen(args) # scheduler gen takes optimizer to return scheduler
+    # scheduler gen takes optimizer to return scheduler
+    scheduler_gen = get_scheduler_generator(args)
     # 1-D mesh
     mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
