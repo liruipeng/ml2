@@ -335,7 +335,6 @@ class Loss:
         loss_b = self.loss_func(u_bc, u_ex_bc)
         loss += self.bc_weight * loss_b
 
-
         xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
 
