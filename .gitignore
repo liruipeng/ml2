@@ -1,5 +1,9 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+.python-version 
+# This file is recommended to be included in version control for reproducibility, but can be ignored if use as package.
+poetry.lock
+*.py[cod]
 *.py[cod]
 *$py.class
 .vscode
