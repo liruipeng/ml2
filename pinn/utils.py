@@ -22,7 +22,10 @@ from scipy.fft import rfft, rfftfreq
 import numpy as np
 import torch
 import ast
+from torch.nn.functional import cosine_similarity
+from torchjd import aggregation as agg
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 def cleanfiles(dir_name):
@@ -78,8 +81,8 @@ def parse_args(args=None):
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
-    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1],
-                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
+    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1, 2],
+                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss. 1 for DRM, 2 for DRN+PINN")
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
@@ -93,6 +96,9 @@ def parse_args(args=None):
                         help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
+    parser.add_argument('--aggregator', type=str, nargs='+', default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
+
+    parser.add_argument('--monitor_aggregator', action='store_true', help="If set, monitor gradient. This need to set up aggregator")
     parser.add_argument("--scheduler", type=str, default="StepLR",
                         help="Learning rate scheduler to use. "
                         "See https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers")
@@ -230,8 +236,28 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
     video.release()
     print(f"  Video saved as {output_file_path}")
 
+def get_aggregator(name: str):
+    if isinstance(name, str):
+        return getattr(agg, name)()
+    elif name[0]=="Constant":
+        return getattr(agg, name[0])(torch.tensor([ast.literal_eval(i) for i in name[1:]]).to(device))
+    else:
+        return getattr(agg, name[0])(*[ast.literal_eval(i) for i in name[1:]])
 
-# %%
+def monitor_aggregator(aggregator):
+    def print_weights(_, __, weights: torch.Tensor) -> None:
+        """Prints the extracted weights."""
+        print(f"Weights: {weights}")
+
+    def print_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
+        """Prints the cosine similarity between the aggregation and the average gradient."""
+        matrix = inputs[0]
+        gd_output = matrix.mean(dim=0)
+        similarity = cosine_similarity(aggregation, gd_output, dim=0)
+        print(f"Cosine similarity: {similarity.item():.4f}")
+    aggregator.weighting.register_forward_hook(print_weights)
+    aggregator.register_forward_hook(print_gd_similarity)
+    
 def fourier_analysis(x, y):
     """
     Compute the magnitude spectrum using the Fast Fourier Transform (FFT).

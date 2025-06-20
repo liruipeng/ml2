@@ -45,10 +45,12 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchjd
+from torchjd import aggregation as agg
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
-from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step, monitor_aggregator, get_aggregator
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -280,6 +282,8 @@ class Loss:
             self.name = "PINN Loss"
         elif self.type == 1:
             self.name = "DRM Loss"
+        elif self.type == 2: 
+            self.name = "PINN+DRM Loss"
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         self.bc_weight = bc_weight
@@ -289,7 +293,7 @@ class Loss:
         x = mesh.x_train
         u = model.get_solution(x)
         loss = loss_func(u, mesh.u_ex)
-        return loss
+        return loss, [loss,]
 
     # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
@@ -301,15 +305,15 @@ class Loss:
 
         # Internal loss
         pde = mesh.pde
-        loss = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
+        loss_pinn = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
         # Boundary loss
         if not model.enforce_bc:
             u_bc = u[[0, -1]]
             u_ex_bc = mesh.u_ex[[0, -1]]
             loss_b = loss_func(u_bc, u_ex_bc)
-            loss += self.bc_weight * loss_b
-
-        return loss
+            loss = loss_pinn + self.bc_weight * loss_b
+            return loss, [loss_pinn, loss_b]
+        return loss_pinn, [loss_pinn,]
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
@@ -327,17 +331,27 @@ class Loss:
         fu_prod = f_val * u
 
         integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
-        loss = torch.mean(integrand_values)
 
-        # Boundary loss
-        u_bc = u[[0, -1]]
-        u_ex_bc = mesh.u_ex[[0, -1]]
-        loss_b = self.loss_func(u_bc, u_ex_bc)
-        loss += self.bc_weight * loss_b
+        loss_drm = torch.mean(integrand_values)
 
-        xs.requires_grad_(False)  # Disable gradient tracking for x
-        return loss
+        if not model.enforce_bc:
+            # Boundary loss
+            u_bc = u[[0,-1]] 
+            u_ex_bc = mesh.u_ex[[0,-1]]
+            loss_b = self.loss_func(u_bc, u_ex_bc)
+            loss = loss_drm + self.bc_weight * loss_b
+            return loss, [loss_drm, loss_b]
 
+        #xs.requires_grad_(False)  # Disable gradient tracking for x
+        return loss_drm, [loss_drm,]
+    def drmpinn_loss(self, model, mesh):
+        """Combined Deep Ritz Method and PINN loss"""
+        loss_p, loss_ps = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
+        loss_d, loss_ds = self.drm_loss(model=model, mesh=mesh)
+        # Combine losses
+        loss = loss_p + loss_d
+        multi_loss = [*loss_ps, loss_ds[0]]
+        return loss, multi_loss
     def loss(self, model, mesh):
         if self.type == -1:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
@@ -345,16 +359,20 @@ class Loss:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 1:
             loss_value = self.drm_loss(model=model, mesh=mesh)
+        elif self.type == 2:
+            loss_value = self.drmpinn_loss(model=model, mesh=mesh) 
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
 
-
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
-          level_idx, frame_dir, scheduler_gen):
+          level_idx, frame_dir, scheduler_gen, aggregator:str='None', do_monitor_aggregator:bool=False):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    aggregator = None if aggregator == 'None' else get_aggregator(aggregator)
+    if (aggregator is not None) and (do_monitor_aggregator):
+        monitor_aggregator(aggregator)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
     scheduler = scheduler_gen(optimizer)
@@ -375,7 +393,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
         def closure():
             optimizer.zero_grad()
-            loss = criterion.loss(model=model, mesh=mesh)
+            loss, _ = criterion.loss(model=model, mesh=mesh)
             loss.backward()
             return loss
 
@@ -385,10 +403,13 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
             optimizer.zero_grad()
             # compute the loss value for the current batch of data
-            loss = criterion.loss(model=model, mesh=mesh)
+            loss, multiloss = criterion.loss(model=model, mesh=mesh)
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
-            loss.backward()
+            if aggregator is None:
+                loss.backward()
+            else: 
+                torchjd.backward(multiloss, aggregator=aggregator,)
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
@@ -478,7 +499,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
+                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
