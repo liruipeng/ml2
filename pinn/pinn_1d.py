@@ -45,10 +45,12 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchjd
+from torchjd import aggregation as agg
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
-from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step, monitor_aggregator
+from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step, monitor_aggregator, get_aggregator
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -366,7 +368,7 @@ class Loss:
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
-          level_idx, frame_dir, scheduler_gen):
+          level_idx, frame_dir, scheduler_gen, aggregator:str='None', do_monitor_aggregator:bool=False):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     aggregator = None if aggregator == 'None' else get_aggregator(aggregator)
     if (aggregator is not None) and (do_monitor_aggregator):
@@ -497,7 +499,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
+                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
