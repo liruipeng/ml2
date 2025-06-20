@@ -498,7 +498,6 @@ def main(args=None):
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
-                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
