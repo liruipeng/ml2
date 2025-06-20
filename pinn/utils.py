@@ -101,6 +101,7 @@ def parse_args(args=None):
                         help="Configuration for learning rate scheduler. "
                         "Follow https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers. "
                         "The setting is corresponding to `--scheduler` setting.")
+    parser.add_argument("--fourier_embedding_sigma", type=float, default=-1, help="Sigma for Fourier embedding. Recommended [1,10] ")
 
     args = parser.parse_args(args)
 
