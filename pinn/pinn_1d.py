@@ -48,7 +48,7 @@ import torch.optim as optim
 import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
-from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step, monitor_aggregator
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
