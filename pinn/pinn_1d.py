@@ -135,7 +135,6 @@ class FourierEmbedding(nn.Module):
             dim_inputs: Dimension of the input data
             half_dim_outputs: The output dimension is 2*half_dim_output.
             sigma: Scaling factor for the frequencies. Recommended is [1, 10]
-            act: Activation function to use in the neural network
         Ref: https://arxiv.org/abs/2006.10739
         """
         super().__init__()
