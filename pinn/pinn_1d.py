@@ -45,15 +45,14 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from enum import Enum
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames, is_notebook, cleanfiles, get_aggregator, monitor_aggregator  
-from SOAP.soap import SOAP
-import torchjd
-from torchjd import aggregation as agg
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
+from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+# from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 # %%
 # Define PDE
@@ -102,6 +101,7 @@ class PDE:
     def u_ex_2(self, x):
         return torch.exp(-x**2) * torch.sin(self.mu * x ** 2)
 
+
 # %%
 # Define mesh
 class Mesh:
@@ -123,6 +123,7 @@ class Mesh:
         self.f = pde.f(self.x_train)
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
+
 
 # %%
 # Define one level NN
@@ -151,12 +152,14 @@ class Level(nn.Module):
                 x = self.act(x)
         return x
 
+
 # %%
 # Define level status
 class LevelStatus(Enum):
     OFF = "off"
     TRAIN = "train"
     FROZEN = "frozen"
+
 
 # %%
 # Define multilevel NN
@@ -237,7 +240,7 @@ class MultiLevelNN(nn.Module):
             return torch.zeros((x.shape[0], self.dim_outputs), device=x.device)
         # Concatenate along the column (feature) dimension
         out = torch.cat(ys, dim=1)
-        assert(out.shape[1] == self.num_active_levels() * self.dim_outputs)
+        assert out.shape[1] == self.num_active_levels() * self.dim_outputs
         return out
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
@@ -315,10 +318,10 @@ class Loss:
         xs = mesh.x_train.requires_grad_(True)
         u = model(xs)
 
-        grad_u_pred = torch.autograd.grad(u, xs, 
-                                        grad_outputs=torch.ones_like(u), 
-                                        create_graph=True)[0]
-        
+        grad_u_pred = torch.autograd.grad(u, xs,
+                                          grad_outputs=torch.ones_like(u),
+                                          create_graph=True)[0]
+
         u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
 
@@ -326,6 +329,7 @@ class Loss:
         fu_prod = f_val * u
 
         integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
+
         loss_drm = torch.mean(integrand_values)
 
         if not model.enforce_bc:
@@ -351,7 +355,7 @@ class Loss:
             loss_value = self.super_loss(model=model, mesh=mesh, loss_func=self.loss_func)
         elif self.type == 0:
             loss_value = self.pinn_loss(model=model, mesh=mesh, loss_func=self.loss_func)
-        elif self.type == 1: 
+        elif self.type == 1:
             loss_value = self.drm_loss(model=model, mesh=mesh)
         elif self.type == 2:
             loss_value = self.drmpinn_loss(model=model, mesh=mesh) 
@@ -361,15 +365,15 @@ class Loss:
 
 # %%
 # Define the training loop
-def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
-          num_check, num_plots, sweep_idx, level_idx, frame_dir, aggregator:str='None', do_monitor_aggregator:bool=False):
+def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
+          level_idx, frame_dir, scheduler_gen):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     aggregator = None if aggregator == 'None' else get_aggregator(aggregator)
     if (aggregator is not None) and (do_monitor_aggregator):
         monitor_aggregator(aggregator)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
-    scheduler = StepLR(optimizer, step_size=1000, gamma=0.9)
+    scheduler = scheduler_gen(optimizer)
     use_lbfgs = False
 
     def to_np(t): return t.detach().cpu().numpy()
@@ -407,7 +411,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
-            scheduler.step()
+            scheduler_step(scheduler, loss)
 
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
             model.eval()
@@ -435,6 +439,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate,
                            iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
             model.train()
 
+
 # %%
 # Define the main function
 def main(args=None):
@@ -449,6 +454,8 @@ def main(args=None):
     # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
     loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
     print(f"Using loss: {loss.name}")
+    # scheduler gen takes optimizer to return scheduler
+    scheduler_gen = get_scheduler_generator(args)
     # 1-D mesh
     mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
@@ -474,23 +481,24 @@ def main(args=None):
     for i in range(args.sweeps):
         print("\nTraining Sweep", i)
         # train each level at a time
-        for l in range(args.levels):
+        for lev in range(args.levels):
             # Turn all levels to "frozen" if they are not off
             for k in range(args.levels):
                 if model.get_status(level_idx=k) != LevelStatus.OFF:
                     model.set_status(level_idx=k, status=LevelStatus.FROZEN)
             # Turn level l to "train"
-            model.set_status(level_idx=l, status=LevelStatus.TRAIN)
-            print("\nTraining Level", l)
+            model.set_status(level_idx=lev, status=LevelStatus.TRAIN)
+            print("\nTraining Level", lev)
             model.print_status()
             # set scale
-            scale = l + 1
-            model.set_scale(level_idx=l, scale=scale)
+            scale = lev + 1
+            model.set_scale(level_idx=lev, scale=scale)
             # Crank that !@#$ up
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=l, frame_dir=frame_dir, aggregator=args.aggregator, do_monitor_aggregator=args.monitor_aggregator)
+                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
@@ -500,6 +508,7 @@ def main(args=None):
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Frequencies",
                                output_file="Frequencies.mp4")
     return 0
+
 
 # %%
 # can run it like normal: python filename.py

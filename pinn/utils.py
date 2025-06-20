@@ -13,15 +13,15 @@
 # %%
 import os
 import argparse
+import inspect
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
-import shutil
+from scipy.fft import rfft, rfftfreq
+import numpy as np
 import torch
 import ast
-from torch.nn.functional import cosine_similarity
-from torchjd import aggregation as agg
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,13 +35,15 @@ def cleanfiles(dir_name):
             # elif item.is_dir():
             #    shutil.rmtree(item)
 
+
 # %%
 def is_notebook():
     try:
         from IPython import get_ipython
         return get_ipython().__class__.__name__ == "ZMQInteractiveShell"
-    except:
+    except (ImportError, AttributeError):
         return False
+
 
 # %%
 def parse_args(args=None):
@@ -70,7 +72,7 @@ def parse_args(args=None):
     parser.add_argument('--high_freq', type=int, default=8,
                         help="Highest frequency used in the PDE solution (PDE 1).")
     parser.add_argument('--gamma', type=float, default=0,
-                        help="Coefficient \gamma in the PDE: -u_xx + \gamma u = f.")
+                        help="Coefficient γ in the PDE: -uₓₓ + γ u = f.")
     parser.add_argument('--mu', type=float, default=70,
                         help="Oscillation parameter in the solution (PDE 2).")
     parser.add_argument('--lr', type=float, default=1e-3,
@@ -95,6 +97,14 @@ def parse_args(args=None):
     parser.add_argument('--aggregator', type=str, nargs='+', default='None', help="Aggregator for the loss function. See https://torchjd.org/stable/docs/aggregation/ for options")
 
     parser.add_argument('--monitor_aggregator', action='store_true', help="If set, monitor gradient. This need to set up aggregator")
+    parser.add_argument("--scheduler", type=str, default="StepLR",
+                        help="Learning rate scheduler to use. "
+                        "See https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers")
+    parser.add_argument("--scheduler_config", type=str, nargs='+',
+                        default=["step_size", "1000", "gamma", "0.9"],
+                        help="Configuration for learning rate scheduler. "
+                        "Follow https://docs.pytorch.org/docs/stable/optim.html for full list of schedulers. "
+                        "The setting is corresponding to `--scheduler` setting.")
 
     args = parser.parse_args(args)
 
@@ -103,6 +113,54 @@ def parse_args(args=None):
         args.adam_epochs = args.epochs
 
     return args
+
+
+# %%
+def str2arg(str_info: str):
+    """
+    Convert string to argument with ast.literal_eval.
+    Noted that 'min' functions can cause `ValueError: malformed node or string on`.
+    This return original string if conversion fails.
+    """
+    try:
+        arg = ast.literal_eval(str_info)
+    except (ValueError):
+        arg = str_info
+    return arg
+
+
+# %%
+def get_scheduler_generator(args):
+    """
+    Return scheduler generator by argument
+    """
+    scheduler_name = args.scheduler
+    scheduler_kargs = {k: str2arg(v) for k, v in zip(args.scheduler_config[::2], args.scheduler_config[1::2])}
+    scheduler_attr = getattr(torch.optim.lr_scheduler, scheduler_name)
+
+    def scheduler_generator(optimizer: torch.optim) -> torch.optim.lr_scheduler:
+        """
+        Return scheduler from optimizer
+        Args:
+            optimizer (torch.optim): Optimizer to attach the scheduler to.
+        """
+        return scheduler_attr(optimizer, **scheduler_kargs)
+    return scheduler_generator
+
+
+# %%
+def scheduler_step(scheduler, loss, epoch=None):
+    """
+    Wrapper function for step the learning rate scheduler.
+    """
+    func_args = inspect.getfullargspec(scheduler.step).args
+    # ReduceLROnPlateau scheduler requires metrics on stepping
+    if "metrics" in func_args:
+        scheduler.step(metrics=loss, epoch=epoch)
+    else:
+        # Otherwise, call step without metrics
+        scheduler.step(epoch=epoch)
+
 
 # %%
 def print_args(args):
@@ -124,6 +182,7 @@ def get_activation(name: str):
     if name not in activations:
         raise ValueError(f"Unknown activation function: {name}")
     return activations[name]()
+
 
 # %%
 def save_frame(x, t, y, xs, ys, iteration, title, frame_dir):
