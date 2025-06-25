@@ -49,6 +49,7 @@ import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+from cheby import chebyshev_transformed_features, chebyshev_transformed_features2 # noqa F401
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -157,33 +158,7 @@ class Level(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_chebyshev_basis:
-            chebyshev_transformed_features = []
-            theta = torch.pi * x[:, 0]
-            sin_theta = torch.sin(theta)
-            cos_theta = torch.cos(theta)
-            left_end = torch.abs(theta) < 1e-8
-            right_end = torch.abs(theta - torch.pi) < 1e-8
-
-            u_k_minus_2 = torch.sin((self.chebyshev_freq_min) * theta) / sin_theta
-            u_k_minus_2[left_end] = float(self.chebyshev_freq_min)
-            u_k_minus_2[right_end] = float((self.chebyshev_freq_min) * (-1)**(self.chebyshev_freq_min - 1))
-
-            u_k_minus_1 = torch.sin((self.chebyshev_freq_min + 1) * theta) / sin_theta
-            u_k_minus_1[left_end] = float(self.chebyshev_freq_min + 1)
-            u_k_minus_1[right_end] = float((self.chebyshev_freq_min + 1) * (-1)**(self.chebyshev_freq_min))
-
-            for k_current_degree in range(self.chebyshev_freq_min, self.chebyshev_freq_max + 1):
-                if k_current_degree == self.chebyshev_freq_min:
-                    current_chebyshev_u = u_k_minus_2
-                elif k_current_degree == self.chebyshev_freq_min + 1:
-                    current_chebyshev_u = u_k_minus_1
-                else:
-                    current_chebyshev_u = 2 * cos_theta * u_k_minus_1 - u_k_minus_2
-                    u_k_minus_2 = u_k_minus_1
-                    u_k_minus_1 = current_chebyshev_u
-                chebyshev_transformed_features.append(current_chebyshev_u.unsqueeze(1))
-
-            x_features = torch.cat(chebyshev_transformed_features, dim=1)
+            x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
         else:
             x_features = x
 
