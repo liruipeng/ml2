@@ -83,6 +83,10 @@ def parse_args(args=None):
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
+    parser.add_argument('--chebyshev_freq_min', type=int, default=-1,
+                        help='Minimum frequency for Chebyshev polynomials.')
+    parser.add_argument('--chebyshev_freq_max', type=int, default=-1,
+                        help='Maximum frequency for Chebyshev polynomials.')
     parser.add_argument('--plot', action='store_true',
                         help="If set, generate plots during or after training.")
     parser.add_argument('--no-clear', action='store_false', dest='clear',
@@ -107,6 +111,12 @@ def parse_args(args=None):
     # Set adam_epochs to epochs if not provided
     if args.adam_epochs is None:
         args.adam_epochs = args.epochs
+
+    if (1 <= self.chebyshev_freq_min <= self.chebyshev_freq_max):
+        print(f"Chebyshev basis of frequency {self.chebyshev_freq_min} to {self.chebyshev_freq_max} are used")
+        args.use_chebyshev_basis = True
+    else:
+        args.use_chebyshev_basis = False
 
     return args
 
