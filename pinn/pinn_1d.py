@@ -158,11 +158,11 @@ class Level(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_chebyshev_basis:
             chebyshev_transformed_features = []
-            theta = math.pi * x[:, 0]
+            theta = torch.pi * x[:, 0]
             sin_theta = torch.sin(theta)
             cos_theta = torch.cos(theta)
             left_end = torch.abs(theta) < 1e-8
-            right_end = torch.abs(theta - math.pi) < 1e-8
+            right_end = torch.abs(theta - torch.pi) < 1e-8
 
             u_k_minus_2 = torch.sin((self.chebyshev_freq_min) * theta) / sin_theta
             u_k_minus_2[left_end] = float(self.chebyshev_freq_min)

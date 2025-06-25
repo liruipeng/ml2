@@ -112,8 +112,8 @@ def parse_args(args=None):
     if args.adam_epochs is None:
         args.adam_epochs = args.epochs
 
-    if (1 <= self.chebyshev_freq_min <= self.chebyshev_freq_max):
-        print(f"Chebyshev basis of frequency {self.chebyshev_freq_min} to {self.chebyshev_freq_max} are used")
+    if (1 <= args.chebyshev_freq_min <= args.chebyshev_freq_max):
+        print(f"Chebyshev basis of frequency {args.chebyshev_freq_min} to {args.chebyshev_freq_max} are used")
         args.use_chebyshev_basis = True
     else:
         args.use_chebyshev_basis = False
