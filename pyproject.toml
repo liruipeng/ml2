@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "ml2"
+version = "0.1.0"
+description = "Multi-level learning with PINN"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.7.1"
+numpy = "^2.3.0"
+matplotlib = "^3.10.3"
+scipy = "^1.15.3"
+opencv-python = "^4.11.0.86"
+
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.4.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
