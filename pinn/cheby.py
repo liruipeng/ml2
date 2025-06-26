@@ -1,6 +1,20 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+# ---
+
+# %%
 import torch
 
 
+# %%
 def chebyshev_transformed_features(x, chebyshev_freq_min, chebyshev_freq_max):
     chebyshev_features = []
     theta = torch.pi * x[:, 0]
@@ -31,6 +45,7 @@ def chebyshev_transformed_features(x, chebyshev_freq_min, chebyshev_freq_max):
     return torch.cat(chebyshev_features, dim=1)
 
 
+# %%
 def chebyshev_transformed_features2(x, chebyshev_freq_min, chebyshev_freq_max):
     chebyshev_features = []
     theta = torch.pi * x[:, 0]
