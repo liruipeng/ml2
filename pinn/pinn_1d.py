@@ -49,6 +49,7 @@ import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+from cheby import chebyshev_transformed_features, chebyshev_transformed_features2 # noqa F401
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -129,7 +130,10 @@ class Mesh:
 # Define one level NN
 class Level(nn.Module):
     def __init__(self, dim_inputs, dim_outputs, dim_hidden: list,
-                 act: nn.Module = nn.Tanh()) -> None:
+                 act: nn.Module = nn.Tanh(),
+                 use_chebyshev_basis: bool = False,
+                 chebyshev_freq_min: int = 0,
+                 chebyshev_freq_max: int = 0) -> None:
         """Simple neural network with linear layers and non-linear activation function
         This class is used as universal function approximate for the solution of
         partial differential equations using PINNs
@@ -137,20 +141,33 @@ class Level(nn.Module):
         super().__init__()
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
+        self.use_chebyshev_basis = use_chebyshev_basis
+        self.chebyshev_freq_min = chebyshev_freq_min
+        self.chebyshev_freq_max = chebyshev_freq_max
         # multi-layer MLP
         layer_dim = [dim_inputs] + dim_hidden + [dim_outputs]
+        # Adjust input dimension if using Chebyshev basis for the first layer
+        if self.use_chebyshev_basis:
+            num_chebyshev_features = self.chebyshev_freq_max - self.chebyshev_freq_min + 1
+            layer_dim[0] = num_chebyshev_features
+
         self.linear = nn.ModuleList([nn.Linear(layer_dim[i], layer_dim[i + 1])
                                      for i in range(len(layer_dim) - 1)])
         # activation function
         self.act = act
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_chebyshev_basis:
+            x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+        else:
+            x_features = x
+
         for i, layer in enumerate(self.linear):
-            x = layer(x)
+            x_features = layer(x_features)
             # not applying nonlinear activation in the last layer
             if i < len(self.linear) - 1:
-                x = self.act(x)
-        return x
+                x_features = self.act(x_features)
+        return x_features
 
 
 # %%
@@ -165,12 +182,18 @@ class LevelStatus(Enum):
 # Define multilevel NN
 class MultiLevelNN(nn.Module):
     def __init__(self, mesh: Mesh, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
-                 act: nn.Module = nn.ReLU(), enforce_bc: bool = False) -> None:
+                 act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
+                 use_chebyshev_basis: bool = False,
+                 chebyshev_freq_min: int = 0,
+                 chebyshev_freq_max: int = 0) -> None:
         super().__init__()
         self.mesh = mesh
         # currently the same model on each level
         self.models = nn.ModuleList([
-            Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act)
+            Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
+                  use_chebyshev_basis=use_chebyshev_basis,
+                  chebyshev_freq_min=chebyshev_freq_min,
+                  chebyshev_freq_max=chebyshev_freq_max)
             for _ in range(num_levels)
             ])
         self.dim_inputs = dim_inputs
@@ -428,6 +451,9 @@ def main(args=None):
     torch.manual_seed(0)
     # Parse args
     args = parse_args(args=args)
+    # Ensure chebyshev_freq_max is at least chebyshev_freq_min for range to be valid
+    if args.use_chebyshev_basis and args.chebyshev_freq_max < args.chebyshev_freq_min:
+        raise ValueError("chebyshev_freq_max must be >= chebyshev_freq_min when using Chebyshev basis.")
     print_args(args=args)
     # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
@@ -449,7 +475,10 @@ def main(args=None):
                          dim_inputs=dim_inputs, dim_outputs=dim_outputs,
                          dim_hidden=args.hidden_dims,
                          act=get_activation(args.activation),
-                         enforce_bc=args.enforce_bc)
+                         enforce_bc=args.enforce_bc,
+                         use_chebyshev_basis=args.use_chebyshev_basis,
+                         chebyshev_freq_min=args.chebyshev_freq_min,
+                         chebyshev_freq_max=args.chebyshev_freq_max)
     print(model)
     model.to(device)
     # Plotting
