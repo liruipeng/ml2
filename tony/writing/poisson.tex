@@ -1,0 +1,149 @@
+\documentclass{article}
+\usepackage{amsmath, amsfonts, amsthm}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{subcaption}
+
+\title{Neural Network Solvers for Poisson Equations}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+We consider the Poisson equation
+$$-\nabla^2 u = f \quad \text{in } \Omega$$
+with Dirichlet boundary conditions
+$$u = g \quad \text{on } \partial \Omega$$
+where $\Omega \subset \mathbb{R}^d$ is a domain, $\partial \Omega$ is its boundary, $f$ is a given source term, and $g$ is the boundary value.
+
+\section{Objective functions}
+
+\subsection{Deep Ritz Method (DRM)}
+
+For the Poisson equation, the associated Ritz functional is:
+$$J(u) = \int_{\Omega} \left( \frac{1}{2} |\nabla u|^2 - fu \right) \, dx$$
+The DRM loss function is the discretized version of the Ritz functional, evaluated at collocation points $\{x_i\}_{i=1}^N$ sampled from $\Omega$:
+$$L_{\text{DRM}}(\theta) = \frac{1}{N} \sum_{i=1}^N \left( \frac{1}{2} |\nabla u_{\text{NN}}(x_i; \theta)|^2 - f(x_i) u_{\text{NN}}(x_i; \theta) \right)$$
+This empirical average serves as an approximation of the continuous functional $J(u_{\text{NN}}(\theta))$.
+
+Let $u$ be the analytical solution to the Poisson equation. Define the error as $v = u_{\text{NN}} - u$. Since both $u_{\text{NN}}$ and $u$ satisfy the boundary condition $u=g$ on $\partial\Omega$, we have $v=0$ on $\partial\Omega$.
+Since $-\nabla^2 u = f$, we have
+\begin{align*}
+\int_{\Omega} f v \, dx &= \int_{\Omega} (-\nabla^2 u) v \, dx \\
+&= \int_{\Omega} \nabla u \cdot \nabla v \, dx - \int_{\partial\Omega} (\nabla u \cdot \mathbf{n}) v \, dS \\
+&= \int_{\Omega} \nabla u \cdot \nabla v \, dx
+\end{align*}
+Now, substitute $u_{\text{NN}} = u + v$ into the Ritz functional:
+\begin{align*}
+J(u_{\text{NN}}) &= \int_{\Omega} \left( \frac{1}{2} |\nabla (u + v)|^2 - f (u + v) \right) \, dx \\
+&= \int_{\Omega} \left( \frac{1}{2} (|\nabla u|^2 + 2 \nabla u \cdot \nabla v + |\nabla v|^2) - f u - f v \right) \, dx \\
+&= \int_{\Omega} \left( \frac{1}{2} |\nabla u|^2 - f u \right) \, dx + \int_{\Omega} \left( \nabla u \cdot \nabla v - f v \right) \, dx + \frac{1}{2} \int_{\Omega} |\nabla v|^2 \, dx \\
+&= J(u) + 0 + \frac{1}{2} \int_{\Omega} |\nabla (u_{\text{NN}} - u)|^2 \, dx \\
+&= J(u) + \frac{1}{2} \vert u_{\text{NN}} - u\vert_{H^1(\Omega)}^2
+\end{align*}
+This result shows that the difference between the Ritz functional evaluated at the neural network solution and the true solution is directly proportional to the squared $H^1$-seminorm of the approximation error. Therefore, minimizing $J(u_{\text{NN}})$ is equivalent to minimizing the $H^1$-seminorm of the approximation error.
+
+The gradient of the DRM loss with respect to the neural network parameters $\theta$ is given by
+$$ \nabla_{\theta} L_{\text{DRM}}(\theta) = \frac{1}{N} \sum_{i=1}^N G_{\text{DRM}}(x_i; \theta)$$
+where the local contribution from the point $x$ is
+\begin{equation}
+G_{\text{DRM}}(x; \theta) = \nabla u_{\text{NN}}(x; \theta) \cdot \nabla_{\theta} \nabla u_{\text{NN}}(x; \theta) - f(x) \nabla_{\theta} u_{\text{NN}}(x; \theta)
+\end{equation}
+This means the gradient computation involves second-order derivatives of $u_{\text{NN}}$.
+While the $H^1$-seminorm is a ``weaker" norm theoretically, the practical implications for optimizing neural networks using the DRM loss are significant:
+\begin{enumerate}
+\item \textbf{Indirect Feedback:} The gradient indicates how changing $\theta$ affects the local energy density, instead of local PDE residual. While a global minimization of energy is equivalent to solving the PDE, the feedback mechanism is less direct and intuitive compared to PINNs. The network might satisfy the overall energy minimization but still have localized regions where the strong form of the PDE is poorly satisfied.
+\item \textbf{Noisy Global Estimate:} With a finite and often limited number of samples $N$ (due to the curse of dimensionality in higher dimensions), the Monte Carlo approximation of the integral can be noisy. The noise in the loss value directly translates to noisy gradients. This makes the optimization landscape appear rougher to standard gradient-based optimizers, hindering stable and efficient convergence. The optimizer might spend more iterations trying to find the ``true'' descent direction in account of the stochastic fluctuations.
+\end{enumerate}
+
+
+\subsection{Physics-Informed Neural Networks (PINN)}
+
+For the Poisson equation, the associated $L^2$ residual is:
+$$\mathcal{E}(u) = \int_{\Omega} \vert \nabla^2 u + f \vert^2 \, dx$$
+The PINN loss function is the discrete version of the $L^2$ residual, evaluated at collocation points $\{x_i\}_{i=1}^N$ sampled from $\Omega$:
+$$L_{\text{PINN}}(\theta) = \frac{1}{N} \sum_{i=1}^{N} \left(\nabla^2 u_{\text{NN}}(x_i; \theta) + f(x_i) \right)^2$$
+This empirical average serves as an approximation of the continuous $L^2$ residual $\mathcal{E}(u_{\text{NN}}(\theta))$.
+
+Let $u$ be the analytical solution to the Poisson equation.
+Define the error as $v = u_{\text{NN}} - u$. Since both $u_{\text{NN}}$ and $u$ satisfy the boundary condition $u=g$ on $\partial\Omega$, we have $v=0$ on $\partial\Omega$.
+Since $-\nabla^2 u = f$, we have
+\begin{align*}
+\mathcal{E}(u_{\text{NN}}) &= \int_{\Omega} \vert \nabla^2 u_{\text{NN}} + f \vert^2 \, dx \\
+& = \int_{\Omega} \vert \nabla^2 (u_{\text{NN}} - u) \vert^2 \, dx,
+\end{align*}
+which implies
+$$ C^{-2} \vert u_{\text{NN}} - u \vert_{H^2(\Omega)}^2 \leq \mathcal{E}(u_{\text{NN}}) \leq C^2 \vert u_{\text{NN}} - u \vert_{H^2(\Omega)}^2 $$
+Therefore, minimizing the PINN loss directly minimizes the $H^2$-seminorm of the approximation error, assuming the boundary conditions are strictly imposed. This is a stronger norm than the $H^1$-seminorm for DRM, suggesting that PINNs may lead to smoother solutions, although this also implies a higher requirement for the regularity of the true solution.
+
+The gradient of the PINN loss with respect to the neural network parameters $\theta$ is given by
+$$ \nabla_{\theta} L_{\text{PINN}}(\theta) = \frac{2}{N} \sum_{i=1}^N G_{\text{PINN}}(x_i; \theta)$$
+where the local contribution from the point $x$ is
+\begin{equation}
+G_{\text{PINN}}(x; \theta) = \left( \nabla^2 u_{\text{NN}}(x; \theta) + f(x) \right) \cdot \nabla_{\theta} \nabla^2 u_{\text{NN}}(x; \theta)
+\end{equation}
+This involves third-order derivatives of $u_{\text{NN}}$ with respect to the spatial coordinates.
+Despite requiring higher-order derivatives for the loss computation, PINNs often prove more effective in practice due to:
+\begin{enumerate}
+\item \textbf{Direct Local Feedback:} The gradient directly pushes the network to reduce the local PDE residual. If the local residual is large, the gradient is large, indicating a clear direction to improve the fit. This provides stronger and more direct feedback to the optimizer, guiding it effectively towards satisfying the PDE at each sampled point. This local correction mechanism makes the optimization more stable and robust, even with stochastic sampling.
+\item \textbf{Consistent Gradient Signal:} While PINN loss also involves Monte Carlo sampling, the inherent objective at each sample point is to make the residual zero. The noise introduced by sampling is primarily in which points are selected for a mini-batch, rather than in the value of a global integral itself. This allows standard stochastic optimizers to work effectively, as they are designed to handle mini-batch stochasticity. The average gradient over a mini-batch still provides a reliable direction for reducing the PDE residual.
+\end{enumerate}
+
+% Poincar\'{e}-Friedrichs inequality. 
+
+\section{Architecture for imposition of Dirichlet boundary conditions}
+To strictly impose the boundary condition $u = g$ on $\partial \Omega$, the candidate solution $u_{\text{NN}}(x; \theta)$ is constructed as:
+$$u_{\text{NN}}(x; \theta) = g_0(x) + d(x) \widetilde{u}_{\text{NN}}(x; \theta)$$
+where $g_0(x)$ is a function that satisfies $g_0|_{\partial\Omega} = g$, and $d(x)$ is a function that is zero on the boundary $\partial\Omega$ and positive in the interior $\Omega$. This construction ensures that $u_{\text{NN}}(x; \theta) = g(x)$ for $x \in \partial \Omega$.
+
+\subsection{1D case $\Omega = (0,1)$}
+
+The spatial derivatives of $u_{\text{NN}}(x;\theta)$ are given by
+\begin{equation}
+    \begin{split}
+        u_{\text{NN}}'(x;\theta) & = g_0'(x) + d'(x) \widetilde{u}_{\text{NN}}(x;\theta) + d(x) \widetilde{u}_{\text{NN}}'(x;\theta) \\
+        u_{\text{NN}}''(x;\theta) & = g_0''(x) + d''(x) \widetilde{u}_{\text{NN}}(x;\theta) + 2d'(x) \widetilde{u}_{\text{NN}}'(x;\theta) + d(x) \widetilde{u}_{\text{NN}}''(x;\theta)\\
+    \end{split}
+\end{equation}
+The parametric derivatives of $u_{\text{NN}}(x;\theta)$ are given by
+\begin{equation}
+    \begin{split}
+        \nabla_\theta u_{\text{NN}}(x;\theta) & = d(x) \nabla_\theta \widetilde{u}_{\text{NN}}(x;\theta) \\
+        \nabla_\theta u_{\text{NN}}'(x;\theta) & = d'(x) \nabla_\theta \widetilde{u}_{\text{NN}}(x;\theta) + d(x) \nabla_\theta \widetilde{u}_{\text{NN}}'(x;\theta) \\
+        \nabla_\theta u_{\text{NN}}''(x;\theta) & = d''(x) \nabla_\theta \widetilde{u}_{\text{NN}}(x;\theta) + 2d'(x) \nabla_\theta \widetilde{u}_{\text{NN}}'(x;\theta) + d(x) \nabla_\theta \widetilde{u}_{\text{NN}}''(x;\theta)\\
+    \end{split}
+\end{equation}
+
+At the boundaries $x_0 \in \partial \Omega = \{0,1\}$, since $d(x_0)=0$, we have
+\begin{equation}
+    \begin{split}
+        u_{\text{NN}}(x_0;\theta) & = g_0(x_0) \\
+        u_{\text{NN}}'(x_0;\theta) & = g_0'(x_0) + d'(x_0) \widetilde{u}_{\text{NN}}(x_0;\theta) \\
+        u_{\text{NN}}''(x_0;\theta) & = g_0''(x_0) + d''(x_0) \widetilde{u}_{\text{NN}}(x_0;\theta) + 2d'(x_0) \widetilde{u}_{\text{NN}}'(x_0;\theta) \\
+        \nabla_\theta u_{\text{NN}}(x_0;\theta) & = 0 \\
+        \nabla_\theta u_{\text{NN}}'(x_0;\theta) & = d'(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}(x_0;\theta) \\
+        \nabla_\theta u_{\text{NN}}''(x_0;\theta) & = d''(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}(x_0;\theta) + 2d'(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}'(x_0;\theta) \\
+    \end{split}
+\end{equation}
+As $x \to x_0 \in \partial \Omega = \{0,1\}$, the limit of $G_{\text{DRM}}$ is
+\begin{equation}
+    \begin{split}
+        \lim_{x \to x_0} G_{\text{DRM}}(x; \theta)
+        & = u_{\text{NN}}'(x_0; \theta) \nabla_{\theta} u_{\text{NN}}'(x_0; \theta) - f(x_0) \nabla_{\theta} u_{\text{NN}}(x_0; \theta) \\
+        & = u_{\text{NN}}'(x_0; \theta) d'(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}(x_0;\theta)
+    \end{split}
+\end{equation}
+and the limit of $G_{\text{PINN}}$ is
+\begin{equation}
+    \begin{split}
+        \lim_{x \to x_0} G_{\text{PINN}}(x; \theta)
+        & = (u_{\text{NN}}''(x_0; \theta) + f(x_0)) \nabla_{\theta} u_{\text{NN}}''(x_0; \theta) \\
+        & = (u_{\text{NN}}''(x_0; \theta) + f(x_0))  (d''(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}(x_0;\theta) + 2d'(x_0) \nabla_\theta \widetilde{u}_{\text{NN}}'(x_0;\theta))
+    \end{split}
+\end{equation}
+The critical observation is that, as $x \to x_0$, the gradient signal for DRM $G_{\text{DRM}}(x; \theta)$ does not depend on  $f(x)$. 
+
+\end{document}
