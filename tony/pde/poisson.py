@@ -41,7 +41,6 @@ def get_manufactured_solution(case_number, domain_dim):
         raise ValueError(f"Manufactured solution case {case_number} not defined for dimension {domain_dim}")
 
     def f_exact(x):
-        # To calculate Laplacian using autograd, we need to compute gradients of gradients
         x_clone = x.clone().detach().requires_grad_(True) # Use a clone to avoid modifying original 'x'
         u_val = u_exact(x_clone) # (batch_size, 1)
         grad_u = torch.autograd.grad(u_val, x_clone, grad_outputs=torch.ones_like(u_val), create_graph=True)[0] # (batch_size, domain_dim)

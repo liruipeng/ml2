@@ -1,10 +1,9 @@
 ## TODO
 - Testing
   - hyper-parameters: neurons, activation, weights
-  - manufactured solutions in 1D/2D/3D
+  - manufactured solutions in 2D/3D
 - Implementation
-  - adaptivity: learning rate, weights, collocation points
+  - adaptivity: learning rate (cyclic + reduced on plateau), weights (GradNorm), collocation points (frequency-targeted)
+  - efficiency: precomputed Chebyshev inputs 
   - initialization: SIREN
-  - analysis: sine series expansion for trainable part
-  - other PDEs
-  - 2D/3D Fourier coefficients
+  - analysis: 2D/3D Fourier coefficients
