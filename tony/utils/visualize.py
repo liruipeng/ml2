@@ -58,7 +58,7 @@ def plot_solution_video(base_log_dir, config_obj, rank_val, output_filename='sol
         
         ax.plot(x_coords, u_exact_data_flat, 'k--', label='True Solution')
         line, = ax.plot([], [], 'r-', label='NN Approximation')
-        ax.set_title(f'NN Solution Evolution (1D Poisson - Case {config_obj.case_number})')
+        ax.set_title(f'NN Solution Evolution (1D {config_obj.problem} - Case {config_obj.case_number})')
         ax.set_xlabel('x')
         ax.set_ylabel('u(x)')
         ax.legend()
@@ -85,7 +85,7 @@ def plot_solution_video(base_log_dir, config_obj, rank_val, output_filename='sol
         
         surf = ax.plot_surface(x_coords, y_coords, np.zeros_like(u_exact_reshaped), cmap='plasma', alpha=0.9)
         
-        ax.set_title(f'NN Solution Evolution (2D Poisson - Case {config_obj.case_number})')
+        ax.set_title(f'NN Solution Evolution (2D {config_obj.problem} - Case {config_obj.case_number})')
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('u(x,y)')
@@ -141,7 +141,7 @@ def plot_solution_video(base_log_dir, config_obj, rank_val, output_filename='sol
                                                                config.domain_bounds[plot_dims[1]][0], config_obj.domain_bounds[plot_dims[1]][1]],
                              cmap='plasma', vmin=c_min, vmax=c_max)
 
-        ax.set_title(f'NN Solution Evolution (3D Poisson - Case {config_obj.case_number})\nSlice at {chr(ord("x")+slice_dim)}={actual_slice_val:.2f}')
+        ax.set_title(f'NN Solution Evolution (3D {config_obj.problem} - Case {config_obj.case_number})\nSlice at {chr(ord("x")+slice_dim)}={actual_slice_val:.2f}')
         ax.set_xlabel(f'{chr(ord("x")+plot_dims[0])}')
         ax.set_ylabel(f'{chr(ord("x")+plot_dims[1])}')
         plt.colorbar(img_nn, ax=ax, label='u value')

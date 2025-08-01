@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-class PoissonSolverConfig:
+class EllipticSolverConfig:
     def __init__(self, **kwargs):
         device_arg = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
         if isinstance(device_arg, str):
@@ -10,6 +10,8 @@ class PoissonSolverConfig:
             self.device = device_arg
         else:
             raise TypeError(f"Device must be a string or torch.device object, got {type(device_arg)}")
+
+        self.problem = kwargs.get('problem', 'poisson')
 
         # Domain parameters
         self.domain_dim = kwargs.get('domain_dim', 1)  # 1, 2, or 3
@@ -25,6 +27,16 @@ class PoissonSolverConfig:
         self.activation = kwargs.get('activation', 'tanh') # e.g., 'tanh', 'relu', 'sigmoid'
         self.bc_extension = kwargs.get('bc_extension', 'hermite_cubic_2nd_hermite')
         self.distance = kwargs.get('distance', 'sin_half_period')
+        self.use_positional_encoding = False
+        self.pe_freq_min = kwargs.get('pe_freq_min', -1) # Minimum positional encoding frequency power
+        self.pe_freq_max = kwargs.get('pe_freq_max', -1) # Maximum positional encoding frequency power
+        if (0 <= self.pe_freq_min <= self.pe_freq_max):
+            if self.domain_dim != 1:
+                print("Warning: Positional encoding is only implemented for 1D problems. Turning False")
+            else:
+                print(f"Positional encoding of frequency power {self.pe_freq_min} to {self.pe_freq_max} are used")
+                self.use_positional_encoding = True
+
         self.use_chebyshev_basis = False
         self.chebyshev_freq_min = kwargs.get('chebyshev_freq_min', -1) # Minimum Chebyshev frequency
         self.chebyshev_freq_max = kwargs.get('chebyshev_freq_max', -1) # Maximum Chebyshev frequency
@@ -34,6 +46,9 @@ class PoissonSolverConfig:
             else:
                 print(f"Chebyshev basis of frequency {self.chebyshev_freq_min} to {self.chebyshev_freq_max} are used")
                 self.use_chebyshev_basis = True
+
+        if self.use_positional_encoding and self.use_chebyshev_basis:
+            raise RuntimeError("Positional encoding is not compatiable with chebyshev basis.")
 
         # Training Parameters
         self.num_epochs = kwargs.get('num_epochs', 5000)

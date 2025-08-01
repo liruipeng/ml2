@@ -10,10 +10,10 @@ from mpi4py import MPI
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from config.elliptic import EllipticSolverConfig
-from pde.poisson import get_manufactured_solution
+from pde.reaction_diffusion import get_manufactured_solution
 from model.mlp import NNModel
 from model.bc import get_g0_func, get_d_func
-from loss.poisson import calculate_drm_loss, calculate_pinn_loss
+from loss.reaction_diffusion import calculate_drm_loss, calculate_pinn_loss
 from data.samplers import generate_uniform_grid_points
 from analysis.fourier import calculate_fourier_coefficients
 from utils.log import ExperimentLogger
@@ -23,26 +23,22 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-# Helper function for evaluation, logging, and saving
-def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_func, logger, rank_val,
-                     eval_points_for_plot_np, u_exact_plot_data_flat,
+def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_func, a_exact_func, c_exact_func, 
+                     logger, rank_val, eval_points_for_plot_np, u_exact_plot_data_flat,
                      full_uniform_grid_points, current_drm_weight, current_pinn_weight):
     u_nn_model.eval()
 
     eval_points_for_errors = full_uniform_grid_points.requires_grad_(True).to(config.device)
 
-    # Calculate losses
-    drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, eval_points_for_errors)
-    pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, eval_points_for_errors, config.domain_dim)
+    drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, a_exact_func, c_exact_func, eval_points_for_errors)
+    pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, a_exact_func, c_exact_func, eval_points_for_errors, config.domain_dim)
     
-    # Use the passed current weights for logging/total loss calculation during evaluation
     total_loss = current_drm_weight * drm_loss + current_pinn_weight * pinn_loss
 
     if epoch == 0:
         history['total_loss'].append(total_loss.item())
         history['drm_loss'].append(drm_loss.item())
         history['pinn_loss'].append(pinn_loss.item())
-        # Also log the weights for epoch 0
         logger.log_scalar('Weights/DRM_Weight', current_drm_weight, step=epoch)
         logger.log_scalar('Weights/PINN_Weight', current_pinn_weight, step=epoch)
 
@@ -96,7 +92,6 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
     history['h1_seminorm_error_u'].append(h1_seminorm_error_u.item())
     history['h2_seminorm_error_u'].append(h2_seminorm_error_u.item())
 
-    # Fourier coefficient
     if config.domain_dim != 1:
         print(f"Fourier coefficient calculation for real basis is only supported for 1D. "
               f"Current domain dimension is {config.domain_dim}. Skipping calculation.")
@@ -124,7 +119,6 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
             logger.log_scalar(f'Fourier/True_Coeff_Magnitude_Freq_{freq_key}', fourier_data['true_coeffs'][i], step=epoch)
             logger.log_scalar(f'Fourier/Error_Coeff_Magnitude_Freq_{freq_key}', fourier_data['error_coeffs'][i], step=epoch)
 
-        # Save true solution data ONCE per run
         if eval_points_for_plot_np is None:
             eval_points_for_plot_np = eval_points_for_plot_np_current
             u_exact_plot_data_flat = u_exact_plot_data_flat_current
@@ -132,7 +126,6 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
                                   'true_solution_data', epoch)
             logger.log_message(f"Saved true solution and evaluation points for plotting.")
 
-        # Save NN solution snapshots
         if u_pred_plot_data_flat_current is not None and u_pred_plot_data_flat_current.size > 0:
             logger.save_plot_data({'u_nn_data': u_pred_plot_data_flat_current}, 'nn_solution_data', epoch)
             history['solution_snapshots_epochs'].append(epoch)
@@ -141,15 +134,12 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
 
     current_lr = None
     if epoch == 0:
-        # For initial eval, use the initial learning rate from config
         current_lr = config.learning_rate
         logger.log_scalar('Learning_Rate', current_lr, step=epoch)
     elif hasattr(u_nn_model, 'optimizer') and u_nn_model.optimizer is not None and u_nn_model.optimizer.param_groups:
-        # Only get current LR if optimizer is initialized
         current_lr = u_nn_model.optimizer.param_groups[0]['lr']
         logger.log_scalar('Learning_Rate', current_lr, step=epoch)
 
-    # Print to console (each rank prints its own status)
     print_str = f"Rank {rank_val}, Epoch {epoch}/{config.num_epochs}, " \
                 f"L2 Error: {l2_error_u.item():.6e}, " \
                 f"H1 Error: {h1_seminorm_error_u.item():.6e}, " \
@@ -163,11 +153,9 @@ def evaluate_and_log(epoch, u_nn_model, history, config, f_exact_func, u_exact_f
 
     return eval_points_for_plot_np, u_exact_plot_data_flat
 
-# --- Main Training Loop for a Single Experiment Run ---
 def run_experiment(config: EllipticSolverConfig, rank_val):
     print(f"Rank {rank_val}: Initializing experiment")
 
-    # Each rank has its own random seed, config file, and model sub-directory
     config.random_seed += rank_val
     torch.manual_seed(config.random_seed)
     np.random.seed(config.random_seed)
@@ -185,19 +173,16 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
     rank_model_path = os.path.join(config.base_model_save_dir, f"run{rank_val+1}")
     os.makedirs(rank_model_path, exist_ok=True)
 
-    # PDE & Boundary Functions
-    u_exact_func, f_exact_func = get_manufactured_solution(config.case_number, config.domain_dim)
+    u_exact_func, f_exact_func, a_exact_func, c_exact_func = get_manufactured_solution(config.case_number, config.domain_dim)
     g0_func = get_g0_func(u_exact_func, config.domain_dim, config.domain_bounds, config.bc_extension)
     d_func = get_d_func(config.domain_dim, config.domain_bounds, config.distance)
 
-    # Uniform grid
     full_uniform_grid_points = generate_uniform_grid_points(
         config.domain_bounds, config.num_uniform_partition
     ).to(config.device)
     total_domain_points_in_grid = full_uniform_grid_points.shape[0]
     logger.log_message(f"Total domain points in grid: {total_domain_points_in_grid}")
 
-    # NN Model
     u_nn_model = NNModel(
         input_dim=config.domain_dim,
         output_dim=1,
@@ -213,11 +198,9 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
         chebyshev_freq_max=config.chebyshev_freq_max
     ).to(config.device)
 
-    # Optimizer and Learning Rate Scheduler
     optimizer_class = getattr(optim, config.optimizer_type)
     optimizer = optimizer_class(u_nn_model.parameters(), lr=config.learning_rate)
 
-    # Attach optimizer to model for easy access in evaluate_and_log
     u_nn_model.optimizer = optimizer
 
     if config.lr_scheduler_type == 'ExponentialLR':
@@ -236,7 +219,9 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
     else:
         lr_scheduler = None
 
-    # Training Loop
+    d_min = 1
+    d_max = max(1, total_domain_points_in_grid // config.batch_size)
+
     logger.log_message(f"Starting training for {config.num_epochs} epochs...")
 
     history = {
@@ -251,7 +236,6 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
 
     start_total_time = time.time()
 
-    # Initial evaluation and checkpoint
     if config.steps_per_cycle > 0:
         current_drm_weight = 1.0
         current_pinn_weight = 0.0
@@ -267,6 +251,8 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
         config=config,
         f_exact_func=f_exact_func,
         u_exact_func=u_exact_func,
+        a_exact_func=a_exact_func,
+        c_exact_func=c_exact_func,
         logger=logger,
         rank_val=rank_val,
         eval_points_for_plot_np=eval_points_for_plot_np,
@@ -280,9 +266,7 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
 
     for epoch in range(1, config.num_epochs + 1):
         u_nn_model.train()
-        optimizer.zero_grad()
 
-        # Determine current step within the cycle
         if config.steps_per_cycle > 0:
             if epoch > config.num_epochs - config.drm_steps_per_cycle / 2:
                 current_drm_weight = 0.0
@@ -291,35 +275,74 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
                 current_angle = 2 * np.pi / config.steps_per_cycle * (epoch - config.drm_steps_per_cycle)
                 current_drm_weight = 1 / (1 + np.exp(0.01 * config.steps_per_cycle * np.sin(current_angle)))
                 current_pinn_weight = 1.0 - current_drm_weight
+            else:
+                current_drm_weight = 1.0
+                current_pinn_weight = 0.0
+
+        current_drm_weight = max(0.0, min(1.0, current_drm_weight))
+        current_pinn_weight = max(0.0, min(1.0, current_pinn_weight))
                 
-        # Log the current weights
         logger.log_scalar('Weights/DRM_Weight', current_drm_weight, step=epoch)
         logger.log_scalar('Weights/PINN_Weight', current_pinn_weight, step=epoch)
 
-        # Mini-batching for domain points from the pre-generated grid
-        train_batch_size = min(config.batch_size, total_domain_points_in_grid)
-        indices = torch.randperm(total_domain_points_in_grid)[:train_batch_size]
-        sampled_domain_points_batch = full_uniform_grid_points[indices].requires_grad_(True).to(config.device)
+        clamped_drm_weight = max(0.0, min(1.0, current_drm_weight))
+        dynamic_d = int(d_min + (d_max - d_min) * (1 - clamped_drm_weight))
+        dynamic_d = max(1, dynamic_d)
 
-        # Calculate losses using the sampled batches and current weights
-        drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, sampled_domain_points_batch)
-        pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, sampled_domain_points_batch, config.domain_dim)
+        all_strided_indices = []
+        for p in range(dynamic_d):
+            all_strided_indices.extend(range(p, total_domain_points_in_grid, dynamic_d))
         
-        total_loss = current_drm_weight * drm_loss + current_pinn_weight * pinn_loss
+        all_strided_indices_tensor = torch.tensor(all_strided_indices, dtype=torch.long)
+        all_strided_indices_tensor = all_strided_indices_tensor[torch.randperm(all_strided_indices_tensor.shape[0])]
 
-        total_loss.backward()
-        optimizer.step()
+        num_samples_for_epoch = all_strided_indices_tensor.shape[0]
+        num_batches_per_epoch = (num_samples_for_epoch + config.batch_size - 1) // config.batch_size
 
-        # Apply step-based schedulers every epoch
+        epoch_total_loss_sum = 0.0
+        epoch_drm_loss_sum = 0.0
+        epoch_pinn_loss_sum = 0.0
+        num_batches_actual = 0
+
+        for batch_idx_in_epoch in range(num_batches_per_epoch):
+            optimizer.zero_grad()
+
+            batch_start = batch_idx_in_epoch * config.batch_size
+            batch_end = min((batch_idx_in_epoch + 1) * config.batch_size, num_samples_for_epoch)
+            
+            current_batch_indices = all_strided_indices_tensor[batch_start:batch_end]
+            
+            if current_batch_indices.numel() == 0:
+                continue
+
+            sampled_domain_points_batch = full_uniform_grid_points[current_batch_indices].requires_grad_(True).to(config.device)
+
+            drm_loss = calculate_drm_loss(u_nn_model, f_exact_func, a_exact_func, c_exact_func, sampled_domain_points_batch)
+            pinn_loss = calculate_pinn_loss(u_nn_model, f_exact_func, a_exact_func, c_exact_func, sampled_domain_points_batch, config.domain_dim)
+            
+            total_loss = current_drm_weight * drm_loss + current_pinn_weight * pinn_loss
+
+            total_loss.backward()
+            optimizer.step()
+
+            epoch_total_loss_sum += total_loss.item()
+            epoch_drm_loss_sum += drm_loss.item()
+            epoch_pinn_loss_sum += pinn_loss.item()
+            num_batches_actual += 1
+
         if lr_scheduler and config.lr_scheduler_type != 'ReduceLROnPlateau':
             lr_scheduler.step()
 
-        # Log losses for current epoch
-        history['total_loss'].append(total_loss.item())
-        history['drm_loss'].append(drm_loss.item())
-        history['pinn_loss'].append(pinn_loss.item())
+        if num_batches_actual > 0:
+            history['total_loss'].append(epoch_total_loss_sum / num_batches_actual)
+            history['drm_loss'].append(epoch_drm_loss_sum / num_batches_actual)
+            history['pinn_loss'].append(epoch_pinn_loss_sum / num_batches_actual)
+        else:
+            history['total_loss'].append(history['total_loss'][-1] if history['total_loss'] else 0.0)
+            history['drm_loss'].append(history['drm_loss'][-1] if history['drm_loss'] else 0.0)
+            history['pinn_loss'].append(history['pinn_loss'][-1] if history['pinn_loss'] else 0.0)
 
-        if epoch % config.logging_freq == 0: # Check for logging frequency
+        if epoch % config.logging_freq == 0:
             logger.log_message(f"--- Epoch {epoch} ---")
             eval_points_for_plot_np, u_exact_plot_data_flat = evaluate_and_log(
                 epoch=epoch,
@@ -328,20 +351,22 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
                 config=config,
                 f_exact_func=f_exact_func,
                 u_exact_func=u_exact_func,
+                a_exact_func=a_exact_func,
+                c_exact_func=c_exact_func,
                 logger=logger,
                 rank_val=rank_val,
                 eval_points_for_plot_np=eval_points_for_plot_np,
                 u_exact_plot_data_flat=u_exact_plot_data_flat,
                 full_uniform_grid_points=full_uniform_grid_points,
-                current_drm_weight=current_drm_weight, # Pass weights for eval/logging
+                current_drm_weight=current_drm_weight,
                 current_pinn_weight=current_pinn_weight
             )
-            # Apply ReduceLROnPlateau when metric is available (after evaluate_and_log)
             if lr_scheduler and config.lr_scheduler_type == 'ReduceLROnPlateau':
-                metric = history['total_loss'][-1] # Use the last logged total loss as the metric
+                metric = history['total_loss'][-1]
                 lr_scheduler.step(metric)
 
-        if epoch % config.checkpoint_freq == 0: # Check for checkpoint frequency
+
+        if epoch % config.checkpoint_freq == 0:
             torch.save(u_nn_model.state_dict(), os.path.join(rank_model_path, f'model_epoch_{epoch}.pth'))
             logger.log_message(f"Checkpoint saved at epoch {epoch}")
 
@@ -350,19 +375,14 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
     logger.log_message(f"Training finished in {total_duration:.2f} seconds.")
     torch.save(u_nn_model.state_dict(), os.path.join(rank_model_path, 'model_final.pth'))
     
-    # Return the log directory for plotting (which is unique for this rank)
     rank_log_dir_for_plotting = logger.log_dir
     logger.close()  
 
-    # Return state_dict and history for gathering by rank 0
     return u_nn_model.state_dict(), history
 
-
-# --- Main Execution Block with Argument Parsing ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run Poisson experiments with configurable parameters.')
+    parser = argparse.ArgumentParser(description='Run reaction-diffusion experiments with configurable parameters.')
 
-    # Core experiment parameters
     parser.add_argument('--dim', type=int, default=1, choices=[1, 2, 3],
                         help='Dimension of the problem (1, 2, or 3).')
     parser.add_argument('--epochs', type=int, default=1000,
@@ -372,10 +392,9 @@ if __name__ == "__main__":
     parser.add_argument('--case', type=int, default=4,
                         help='Manufactured solution case number.')
 
-    # Neural Network Architecture
     parser.add_argument('--hidden_neurons', type=int, nargs='+', default=[30, 30, 30],
                         help='List of integers for the number of neurons in each hidden layer.')
-    parser.add_argument('--activation', type=str, nargs='+', default=['sin'],
+    parser.add_argument('--activation', type=str, nargs='+', default=['tanh'],
                         help='Activation function(s). Can be a single string (e.g., "relu") or a list (e.g., "tanh" "relu").')
     parser.add_argument('--bc_extension', type=str, default='hermite_cubic_2nd_deriv', 
                         choices=['multilinear', 'hermite_cubic_2nd_deriv'],
@@ -392,13 +411,11 @@ if __name__ == "__main__":
     parser.add_argument('--chebyshev_freq_max', type=int, default=-1,
                         help='Maximum frequency for Chebyshev polynomials.')
 
-    # Sampling parameters
     parser.add_argument('--num_uniform_partition', type=int, default=64,
                         help='Number of subintervals along each dimension for uniform partitioning.')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Number of points in each batch.')
     
-    # Loss function
     parser.add_argument('--drm_weight', type=float, default=0.0,
                         help='Weight for the DRM loss term (used if drm_steps_per_cycle is 0).')
     parser.add_argument('--pinn_weight', type=float, default=1.0,
@@ -408,7 +425,6 @@ if __name__ == "__main__":
     parser.add_argument('--pinn_steps_per_cycle', type=int, default=0,
                         help='Number of epochs to train with PINN loss active in each cycle.')
 
-    # Optimization
     parser.add_argument('--optimizer_type', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS'],
                         help='Type of optimizer to use (e.g., Adam, SGD, LBFGS).')
     parser.add_argument('--lr', type=float, default=1e-3,
@@ -431,7 +447,6 @@ if __name__ == "__main__":
     parser.add_argument('--lr_patience_mode', type=str, default='min', choices=['min', 'max'],
                         help='Mode for ReduceLROnPlateau (e.g., "min" for loss, "max" for accuracy).')
 
-    # Logging and plotting
     parser.add_argument('--logging_freq', type=int, default=50,
                         help='Frequency (in epochs) to log metrics and save snapshots.')
     parser.add_argument('--plot_resolution', type=int, default=256,
@@ -440,7 +455,7 @@ if __name__ == "__main__":
                         help='Whether to log Fourier coefficients in the real basis.')
     parser.add_argument('--use_sine_series', type=bool, default=True,
                         help='Whether to use sine series expansion instead of full Fourier series expansion.')
-    parser.add_argument('--fourier_freq', type=int, nargs='+', default=[1, 3, 7],
+    parser.add_argument('--fourier_freq', type=int, nargs='+', default=[1, 2, 10, 20],
                         help='Frequency of Fourier coefficients to log.')
     parser.add_argument('--base_log_dir', type=str, default='logs',
                         help='Base directory for saving experiment logs.')
@@ -449,7 +464,6 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_freq', type=int, default=1000,
                         help='Frequency (in epochs) to save model checkpoints.')
 
-    # 3D specific plotting (if dim=3)
     parser.add_argument('--slice_plane_dim', type=int, default=2, choices=[0, 1, 2],
                         help='For 3D, which dimension to slice (0 for x, 1 for y, 2 for z).')
     parser.add_argument('--slice_plane_val', type=float, default=0.5,
@@ -457,16 +471,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Special handling for activation argument if it's a single string vs. a list
     if len(args.activation) == 1:
         parsed_activation = args.activation[0]
     else:
         parsed_activation = args.activation
 
-    # Define common configuration arguments, including device
     base_config_kwargs = {
         'device': torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        'problem': 'Poisson', 
+        'problem': 'reaction-diffusion', 
         'domain_dim': args.dim,
         'case_number': args.case,
         'random_seed': args.seed,
@@ -507,7 +519,6 @@ if __name__ == "__main__":
         'slice_plane_val': args.slice_plane_val,
     }
 
-    # Set domain bounds based on dimension
     if args.dim == 1:
         base_config_kwargs['domain_bounds'] = (0.0, 1.0)
     elif args.dim == 2:
@@ -515,14 +526,12 @@ if __name__ == "__main__":
     elif args.dim == 3:
         base_config_kwargs['domain_bounds'] = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
 
-    # Create the config object for THIS rank
     rank_config = EllipticSolverConfig(**base_config_kwargs)
 
     print(f"Rank {rank}: Starting its experiment run{rank+1}.")
     model_state_dict, history = run_experiment(rank_config, rank)
     print(f"Rank {rank}: Finished its experiment run{rank+1}.")
 
-    # Each rank will now trigger its own plotting functions
     print(f"Rank {rank}: Generating individual plots for run{rank+1}.")
     plot_solution_video(args.base_log_dir, rank_config, rank,
                         output_filename=f'solution_evolution_run{rank+1}.mp4')
@@ -535,8 +544,6 @@ if __name__ == "__main__":
                                         output_filename=f'fourier_coefficient_errors_evolution_run{rank+1}.png')
     print(f"Rank {rank}: Finished generating individual plots for run{rank+1}.")
 
-
-    # MPI Synchronization and Gathering
     if size > 1:
         print(f"Rank {rank}: Gathering results for ensemble visualization")
         all_histories = comm.gather(history, root=0)

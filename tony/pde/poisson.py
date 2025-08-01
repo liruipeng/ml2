@@ -20,6 +20,10 @@ def get_manufactured_solution(case_number, domain_dim):
                 return (torch.sin(3 * torch.pi * x0) + torch.sin(7 * torch.pi * x0)).unsqueeze(1)
             elif case_number == 5:
                 return (torch.sin(3 * torch.pi * x0) * torch.sin(7 * torch.pi * x0)).unsqueeze(1)
+            elif case_number == 6:
+                return (torch.sin(torch.pi * x0) + torch.sin(2 * torch.pi * x0) + torch.sin(3 * torch.pi * x0) + torch.sin(4 * torch.pi * x0) + torch.sin(5 * torch.pi * x0) + torch.sin(6 * torch.pi * x0) + torch.sin(7 * torch.pi * x0) + torch.sin(8 * torch.pi * x0)).unsqueeze(1)
+            elif case_number == 7:
+                return (torch.sin(2 * torch.pi * x0) + torch.sin(20 * torch.pi * x0)).unsqueeze(1)
             else:
                 raise ValueError(f"Manufactured solution case {case_number} not defined for 1D.")
         elif domain_dim == 2:
