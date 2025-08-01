@@ -3,6 +3,11 @@ import numpy as np
 import scipy.fft as fft
 import math
 
+import torch
+import numpy as np
+import scipy.fft as fft
+import math
+
 def calculate_fourier_coefficients(config, model, u_exact_func):
     """
     Calculates the Fourier coefficients of u_NN, u_exact, and their error based on config.
@@ -27,7 +32,6 @@ def calculate_fourier_coefficients(config, model, u_exact_func):
     if not isinstance(config.domain_bounds[0], (tuple, list)):
         domain_bounds = (config.domain_bounds,)
 
-    # Generate 1D evaluation points for model inference and plotting
     grid_coords = [np.linspace(b[0], b[1], config.plot_resolution) for b in domain_bounds]
     eval_points_for_vis = grid_coords[0][:, np.newaxis]
     eval_points = torch.from_numpy(eval_points_for_vis.astype(np.float32)).to(config.device)
@@ -47,49 +51,82 @@ def calculate_fourier_coefficients(config, model, u_exact_func):
     }
 
     if config.log_fourier_coefficients:
-        # Reshape to grid for FFT (for 1D, this is just a 1D array)
-        u_pred_grid = u_pred_vec.reshape(config.plot_resolution)
-        u_exact_grid = u_exact_vec.reshape(config.plot_resolution)
-        error_grid = error_vec.reshape(config.plot_resolution)
-
         N_points = config.plot_resolution
 
-        fft_u_pred_complex = fft.fft(u_pred_grid)
-        fft_u_exact_complex = fft.fft(u_exact_grid)
-        fft_error_complex = fft.fft(error_grid)
+        if config.use_sine_series:
+            u_pred_interior = u_pred_vec[1:-1]
+            u_exact_interior = u_exact_vec[1:-1]
+            error_interior = error_vec[1:-1]
+            
+            M_dst = N_points - 2 # Number of interior points, and number of DST coefficients
 
-        all_fourier_entries = []
+            # Compute DST-I for each
+            dst_u_pred = fft.dst(u_pred_interior, type=1, norm=None)
+            dst_u_exact = fft.dst(u_exact_interior, type=1, norm=None)
+            dst_error = fft.dst(error_interior, type=1, norm=None)
 
-        # A_0 (constant): A_0 = X_0.real / N
-        A0_nn = fft_u_pred_complex[0].real / N_points
-        A0_exact = fft_u_exact_complex[0].real / N_points
-        A0_error = fft_error_complex[0].real / N_points
-        all_fourier_entries.append({
-            'k_tuple': (0,), 'type': 'cos',
-            'nn_val': np.abs(A0_nn), 'exact_val': np.abs(A0_exact), 'error_val': np.abs(A0_error)
-        })
+            # Scaling factor for sine coefficients (B_k) for domain [0, 1]
+            scaling_factor = 2.0 / (N_points - 1)
 
-        for k in config.fourier_freq:
-            if k == 0:
-                pass
+            all_fourier_entries = []
+            
+            # Iterate through the frequencies specified in config.fourier_freq
+            for k_freq in config.fourier_freq:
+                if k_freq <= 0 or k_freq > M_dst:
+                    print(f"Warning: Requested sine frequency k={k_freq} is out of bounds [1, {M_dst}] for sine series calculation. Skipping.")
+                    continue
 
-            # A_k (cosine component): Ak = 2 * Re(Xk) / N
-            Ak_nn = 2 * fft_u_pred_complex[k].real / N_points
-            Ak_exact = 2 * fft_u_exact_complex[k].real / N_points
-            Ak_error = 2 * fft_error_complex[k].real / N_points
+                k_idx = k_freq - 1 # DST-I is 0-indexed
+
+                Bk_nn = dst_u_pred[k_idx] * scaling_factor
+                Bk_exact = dst_u_exact[k_idx] * scaling_factor
+                Bk_error = dst_error[k_idx] * scaling_factor
+                
+                all_fourier_entries.append({
+                    'k_tuple': (k_freq,), 'type': 'sin',
+                    'nn_val': np.abs(Bk_nn), 'exact_val': np.abs(Bk_exact), 'error_val': np.abs(Bk_error)
+                })
+        else: # full Fourier series using FFT
+            u_pred_grid = u_pred_vec.reshape(config.plot_resolution)
+            u_exact_grid = u_exact_vec.reshape(config.plot_resolution)
+            error_grid = error_vec.reshape(config.plot_resolution)
+
+            fft_u_pred_complex = fft.fft(u_pred_grid)
+            fft_u_exact_complex = fft.fft(u_exact_grid)
+            fft_error_complex = fft.fft(error_grid)
+
+            all_fourier_entries = []
+
+            # A_0 (constant): A_0 = X_0.real / N
+            A0_nn = fft_u_pred_complex[0].real / N_points
+            A0_exact = fft_u_exact_complex[0].real / N_points
+            A0_error = fft_error_complex[0].real / N_points
             all_fourier_entries.append({
-                'k_tuple': (k,), 'type': 'cos',
-                'nn_val': np.abs(Ak_nn), 'exact_val': np.abs(Ak_exact), 'error_val': np.abs(Ak_error)
+                'k_tuple': (0,), 'type': 'cos',
+                'nn_val': np.abs(A0_nn), 'exact_val': np.abs(A0_exact), 'error_val': np.abs(A0_error)
             })
 
-            # B_k (sine component): Bk = -2 * Im(Xk) / N
-            Bk_nn = -2 * fft_u_pred_complex[k].imag / N_points
-            Bk_exact = -2 * fft_u_exact_complex[k].imag / N_points
-            Bk_error = -2 * fft_error_complex[k].imag / N_points
-            all_fourier_entries.append({
-                'k_tuple': (k,), 'type': 'sin',
-                'nn_val': np.abs(Bk_nn), 'exact_val': np.abs(Bk_exact), 'error_val': np.abs(Bk_error)
-            })
+            for k in config.fourier_freq:
+                if k == 0:
+                    continue # Already handled A0
+
+                # A_k (cosine component): Ak = 2 * Re(Xk) / N
+                Ak_nn = 2 * fft_u_pred_complex[k].real / N_points
+                Ak_exact = 2 * fft_u_exact_complex[k].real / N_points
+                Ak_error = 2 * fft_error_complex[k].real / N_points
+                all_fourier_entries.append({
+                    'k_tuple': (k,), 'type': 'cos',
+                    'nn_val': np.abs(Ak_nn), 'exact_val': np.abs(Ak_exact), 'error_val': np.abs(Ak_error)
+                })
+
+                # B_k (sine component): Bk = -2 * Im(Xk) / N
+                Bk_nn = -2 * fft_u_pred_complex[k].imag / N_points
+                Bk_exact = -2 * fft_u_exact_complex[k].imag / N_points
+                Bk_error = -2 * fft_error_complex[k].imag / N_points
+                all_fourier_entries.append({
+                    'k_tuple': (k,), 'type': 'sin',
+                    'nn_val': np.abs(Bk_nn), 'exact_val': np.abs(Bk_exact), 'error_val': np.abs(Bk_error)
+                })
         
         all_fourier_entries.sort(key=lambda x: (x['k_tuple'][0], x['type']))
 
