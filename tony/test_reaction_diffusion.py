@@ -273,7 +273,7 @@ def run_experiment(config: EllipticSolverConfig, rank_val):
                 current_pinn_weight = 1.0
             elif epoch > config.drm_steps_per_cycle / 2:
                 current_angle = 2 * np.pi / config.steps_per_cycle * (epoch - config.drm_steps_per_cycle)
-                current_drm_weight = 1 / (1 + np.exp(0.01 * config.steps_per_cycle * np.sin(current_angle)))
+                current_drm_weight = 1 / (1 + np.exp(config.steps_per_cycle * np.sin(current_angle)))
                 current_pinn_weight = 1.0 - current_drm_weight
             else:
                 current_drm_weight = 1.0
