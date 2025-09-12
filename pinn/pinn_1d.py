@@ -1,3 +1,46 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.17.1
+#   kernelspec:
+#     display_name: pymfem
+#     language: python
+#     name: python3
+# ---
+
+# %% [markdown]
+# ### 1D PDE problem:
+#
+# $-u_{xx} + \gamma u = f$
+#
+# and homogeneous boundary conditions (BC)
+#
+# #### Problem 1
+# The analytical solution is
+#
+# $u(x) = \sum_k c_k  \sin(2 w_k  \pi  x)$
+#
+# and
+#
+# $f = \sum_k c_k  (4 w_k^2  \pi^2 + \gamma)  \sin(2 w_k  \pi  x)$
+#
+# #### Problem 2 (from [MscaleDNN](https://arxiv.org/abs/2007.11207))
+# The analytical solution is
+#
+# $u(x) = e^{-x^2} \sin(\mu x)$
+#
+# and
+#
+# $f(x) = e^{-x^2} [(r + 4 \mu^2 x^2 - 4 x^2 + 2) \sin(\mu x^2) + (8 \mu x^2 - 2 μ) \cos(\mu x^2)]$
+
+# %%
+# Define modules and device
 import os
 import torch
 import torch.nn as nn
@@ -159,8 +202,13 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
 # Define PDE
 class PDE:
     def __init__(self, high=None, mu=70, r=0, problem=1):
+        # omega = [high]
         omega = list(range(1, high + 1, 2))
+        # omega += [i + 50 for i in omega]
+        # omega = list(range(2, high + 1, 2))
+        # omega = [2**i for i in range(high.bit_length()) if 2**i <= high]
         coeff = [1] * len(omega)
+
         self.w = omega
         self.c = coeff
         self.mu = mu
@@ -206,10 +254,13 @@ class Mesh:
         self.neval = neval
         self.ax = ax
         self.bx = bx
+        # training sample points (excluding the two points on the boundaries)
         self.x_train = torch.linspace(self.ax, self.bx, self.ntrain + 1, device=device)[:-1].unsqueeze(-1)
         self.x_eval = torch.linspace(self.ax, self.bx, self.neval + 1, device=device)[:-1].unsqueeze(-1)
         self.pde = None
+        # source term
         self.f = None
+        # analytical solution
         self.u_ex = None
 
     def set_pde(self, pde: PDE):
@@ -226,18 +277,26 @@ class Level(nn.Module):
                  use_chebyshev_basis: bool = False,
                  chebyshev_freq_min: int = 0,
                  chebyshev_freq_max: int = 0) -> None:
+        """Simple neural network with linear layers and non-linear activation function
+        This class is used as universal function approximate for the solution of
+        partial differential equations using PINNs
+        """
         super().__init__()
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
         self.use_chebyshev_basis = use_chebyshev_basis
         self.chebyshev_freq_min = chebyshev_freq_min
         self.chebyshev_freq_max = chebyshev_freq_max
+        # multi-layer MLP
         layer_dim = [dim_inputs] + dim_hidden + [dim_outputs]
+        # Adjust input dimension if using Chebyshev basis for the first layer
         if self.use_chebyshev_basis:
             num_chebyshev_features = self.chebyshev_freq_max - self.chebyshev_freq_min + 1
             layer_dim[0] = num_chebyshev_features
+
         self.linear = nn.ModuleList([nn.Linear(layer_dim[i], layer_dim[i + 1])
                                      for i in range(len(layer_dim) - 1)])
+        # activation function
         self.act = act
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -245,8 +304,10 @@ class Level(nn.Module):
             x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
         else:
             x_features = x
+
         for i, layer in enumerate(self.linear):
             x_features = layer(x_features)
+            # not applying nonlinear activation in the last layer
             if i < len(self.linear) - 1:
                 x_features = self.act(x_features)
         return x_features
@@ -271,6 +332,7 @@ class MultiLevelNN(nn.Module):
                  chebyshev_freq_max: int = 0) -> None:
         super().__init__()
         self.mesh = mesh
+        # currently the same model on each level
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
         self.enforce_bc = enforce_bc
@@ -299,10 +361,15 @@ class MultiLevelNN(nn.Module):
             for _ in range(num_levels)
             ])
         
+        # All levels start as "off"
         self.level_status = [LevelStatus.OFF] * num_levels
+
+        # No gradients are tracked initially
         for model in self.models:
             for param in model.parameters():
                 param.requires_grad = False
+
+        # Scale factor
         self.scales = [1.0] * num_levels
 
     def get_status(self, level_idx: int):
@@ -332,6 +399,7 @@ class MultiLevelNN(nn.Module):
         return len(self.models)
 
     def num_active_levels(self) -> int:
+        """Returns the number of levels currently active (train or frozen)"""
         return sum(status != LevelStatus.OFF for status in self.level_status)
 
     def set_scale(self, level_idx: int, scale: float):
@@ -352,7 +420,9 @@ class MultiLevelNN(nn.Module):
                 y = model.forward(x=x_scale)
                 ys.append(y)
         if not ys:
+            # No active levels, return zeros with correct shape
             return torch.zeros((x.shape[0], self.dim_outputs), device=x.device)
+        # Concatenate along the column (feature) dimension
         out = torch.cat(ys, dim=1)
         assert out.shape[1] == self.num_active_levels() * self.dim_outputs
         return out
@@ -361,17 +431,25 @@ class MultiLevelNN(nn.Module):
         raw_nn_output = self.forward(x)
         
         n_active = self.num_active_levels()
+        # reshape to [batch_size, num_levels, dim_outputs]
+        # and sum over levels
         if n_active > 1:
             raw_nn_output = raw_nn_output.view(-1, n_active, self.dim_outputs).sum(dim=1)
         
         if self.enforce_bc:
             g0_vals = self.g0_func(x)
             d_vals = self.d_func(x)
-            solution = g0_vals + d_vals * raw_nn_output
+            y = g0_vals + d_vals * raw_nn_output
         else:
-            solution = raw_nn_output
-        return solution
+            y = raw_nn_output
+        return y
 
+    # def _init_weights(self, m):
+    #    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+    #        nn.init.ones_(m.weight)
+    #        m.bias.data.fill_(0.01)
+    #    if type(m) == nn.Linear:
+    #        torch.nn.init.xavier_uniform(m.weight)  #
 
 # %%
 # Define Loss
@@ -389,19 +467,26 @@ class Loss:
             raise ValueError(f"Unknown loss type: {self.type}")
         self.bc_weight = bc_weight
 
+    # "Supervised" loss against the analytical solution
     def super_loss(self, model, mesh, loss_func):
         x = mesh.x_train
         u = model.get_solution(x)
         loss = loss_func(u, mesh.u_ex)
         return loss
 
+    # "PINN" loss
     def pinn_loss(self, model, mesh, loss_func):
         x = mesh.x_train.requires_grad_(True)
         u = model.get_solution(x)
+
         du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
         d2u_dx2, = torch.autograd.grad(du_dx, x, grad_outputs=torch.ones_like(du_dx), create_graph=True)
+
+        # Internal loss
         pde = mesh.pde
         loss = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
+
+        # Boundary loss
         if not model.enforce_bc:
             u_bc = u[[0, -1]]
             u_ex_bc = mesh.u_ex[[0, -1]]
@@ -410,16 +495,20 @@ class Loss:
         return loss
 
     def drm_loss(self, model, mesh: Mesh):
+        """Deep Ritz Method loss"""
         xs = mesh.x_train.requires_grad_(True)
         u = model.get_solution(xs)
         grad_u_pred = torch.autograd.grad(u, xs, grad_outputs=torch.ones_like(u), create_graph=True)[0]
         u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
+
         f_val = mesh.pde.f(xs)
         fu_prod = f_val * u
+
         integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
         loss = torch.mean(integrand_values)
-        xs.requires_grad_(False)
+
+        xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
 
     def loss(self, model, mesh):
@@ -439,6 +528,8 @@ class Loss:
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
           level_idx, frame_dir, scheduler_gen):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
+    #                  precondition_frequency=10)
     scheduler = scheduler_gen(optimizer)
     use_lbfgs = False
 
@@ -464,10 +555,16 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
         if use_lbfgs:
             loss = optimizer.step(closure)
         else:
+            # we need to set to zero the gradients of all model parameters (PyTorch accumulates grad by default)
             optimizer.zero_grad()
+            # compute the loss value for the current batch of data
             loss = criterion.loss(model=model, mesh=mesh)
+            # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
+            # for every parameter x which has requires_grad=True.
             loss.backward()
+            # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
+            #
             scheduler_step(scheduler, loss)
 
         if np.remainder(i + 1, check_freq) == 0 or i == iterations - 1:
@@ -500,18 +597,27 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 # %%
 # Define the main function
 def main(args=None):
+    # For reproducibility
     torch.manual_seed(0)
+    # Parse args
     args = parse_args(args=args)
+    # Ensure chebyshev_freq_max is at least chebyshev_freq_min for range to be valid
     if args.use_chebyshev_basis and args.chebyshev_freq_max < args.chebyshev_freq_min:
         raise ValueError("chebyshev_freq_max must be >= chebyshev_freq_min when using Chebyshev basis.")
     print_args(args=args)
+    # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
+    # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
     loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
     print(f"Using loss: {loss.name}")
+    # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
+    # 1-D mesh
     mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
+    # Create an instance of multilevel model
+    # Input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
     model = MultiLevelNN(mesh=mesh,
@@ -527,26 +633,34 @@ def main(args=None):
                          chebyshev_freq_max=args.chebyshev_freq_max)
     print(model)
     model.to(device)
+    # Plotting
     frame_dir = "./frames"
     os.makedirs(frame_dir, exist_ok=True)
     if args.clear:
         cleanfiles(frame_dir)
     num_plots = args.num_plots if args.plot else 0
+    # Train the model
     for i in range(args.sweeps):
         print("\nTraining Sweep", i)
+        # train each level at a time
         for lev in range(args.levels):
+            # Turn all levels to "frozen" if they are not off
             for k in range(args.levels):
                 if model.get_status(level_idx=k) != LevelStatus.OFF:
                     model.set_status(level_idx=k, status=LevelStatus.FROZEN)
+            # Turn level l to "train"
             model.set_status(level_idx=lev, status=LevelStatus.TRAIN)
             print("\nTraining Level", lev)
             model.print_status()
+            # set scale
             scale = lev + 1
             model.set_scale(level_idx=lev, scale=scale)
+            # Crank that !@#$ up
             train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
+    # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
                                output_file="Solution.mp4")
@@ -558,6 +672,7 @@ def main(args=None):
 
 
 # %%
+# can run it like normal: python filename.py
 if __name__ == "__main__":
     if is_notebook():
         err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot', '--enforce_bc', '--g0_type', 'hermite_cubic_2nd_deriv', '--d_type', 'quadratic_bubble'])
@@ -567,4 +682,4 @@ if __name__ == "__main__":
         import sys
         sys.exit(err)
     except SystemExit:
-        pass
+        pass  # Prevent traceback in Jupyter or VS Code
