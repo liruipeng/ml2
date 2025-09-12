@@ -506,6 +506,7 @@ class Loss:
         grad_u_pred = torch.autograd.grad(u, xs,
                                           grad_outputs=torch.ones_like(u),
                                           create_graph=True)[0]
+
         u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
 
