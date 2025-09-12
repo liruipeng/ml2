@@ -83,6 +83,12 @@ def parse_args(args=None):
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
+    parser.add_argument('--bc_extension', type=str, default='hermite_cubic_2nd_deriv', 
+                        choices=['multilinear', 'hermite_cubic_2nd_deriv'],
+                        help='Boundary value extension function.')
+    parser.add_argument('--distance', type=str, default='sin_half_period', 
+                        choices=['quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', 'ratio_bubble_dist', 'sin_half_period'],
+                        help='Distance function.')
     parser.add_argument('--chebyshev_freq_min', type=int, default=-1,
                         help='Minimum frequency for Chebyshev polynomials.')
     parser.add_argument('--chebyshev_freq_max', type=int, default=-1,
