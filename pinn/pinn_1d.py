@@ -453,6 +453,7 @@ class MultiLevelNN(nn.Module):
     #    if type(m) == nn.Linear:
     #        torch.nn.init.xavier_uniform(m.weight)  #
 
+
 # %%
 # Define Loss
 class Loss:
@@ -494,13 +495,16 @@ class Loss:
             u_ex_bc = mesh.u_ex[[0, -1]]
             loss_b = loss_func(u_bc, u_ex_bc)
             loss += self.bc_weight * loss_b
+
         return loss
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
         xs = mesh.x_train.requires_grad_(True)
         u = model.get_solution(xs)
-        grad_u_pred = torch.autograd.grad(u, xs, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+        grad_u_pred = torch.autograd.grad(u, xs,
+                                          grad_outputs=torch.ones_like(u),
+                                          create_graph=True)[0]
         u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
         grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
 
