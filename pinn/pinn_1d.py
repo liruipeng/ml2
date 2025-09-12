@@ -430,20 +430,21 @@ class MultiLevelNN(nn.Module):
         return out
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
-        raw_nn_output = self.forward(x)
+        y = self.forward(x)
         
         n_active = self.num_active_levels()
         # reshape to [batch_size, num_levels, dim_outputs]
         # and sum over levels
         if n_active > 1:
-            raw_nn_output = raw_nn_output.view(-1, n_active, self.dim_outputs).sum(dim=1)
-        
+            y = y.view(-1, n_active, self.dim_outputs)
+            y = y.sum(dim=1)  # shape: (n, dim_outputs)
+        #
+
         if self.enforce_bc:
             g0_vals = self.g0_func(x)
             d_vals = self.d_func(x)
-            y = g0_vals + d_vals * raw_nn_output
-        else:
-            y = raw_nn_output
+            y = g0_vals + d_vals * y
+
         return y
 
     # def _init_weights(self, m):
