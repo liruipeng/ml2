@@ -265,7 +265,9 @@ class Mesh:
 
     def set_pde(self, pde: PDE):
         self.pde = pde
+        # source term
         self.f = pde.f(self.x_train)
+        # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
 
 
