@@ -330,8 +330,7 @@ class MultiLevelNN(nn.Module):
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
                  g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
-                 chebyshev_freq_min: int = 0,
-                 chebyshev_freq_max: int = 0) -> None:
+                 chebyshev_freqs: np.ndarray = None) -> None:
         super().__init__()
         self.mesh = mesh
         # currently the same model on each level
@@ -356,12 +355,11 @@ class MultiLevelNN(nn.Module):
             print(f"BCs will be enforced using g0_type: {g0_type} and d_type: {d_type}")
 
         self.use_chebyshev_basis = use_chebyshev_basis
-        self.chebyshev_freqs = np.round(np.linspace(chebyshev_freq_min, chebyshev_freq_max, num_levels + 1)).astype(int)
         self.models = nn.ModuleList([
             Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
                   use_chebyshev_basis=use_chebyshev_basis,
-                  chebyshev_freq_min=self.chebyshev_freqs[i],
-                  chebyshev_freq_max=self.chebyshev_freqs[i+1])
+                  chebyshev_freq_min=chebyshev_freqs[i],
+                  chebyshev_freq_max=chebyshev_freqs[i+1])
             for i in range(num_levels)
             ])
         
@@ -625,8 +623,17 @@ def main(args=None):
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
     # Loss function [supervised with analytical solution (-1) or PINN loss (0)]
-    loss = Loss(loss_type=args.loss_type, bc_weight=args.bc_weight)
-    print(f"Using loss: {loss.name}")
+    losses = []
+    losses.append(Loss(loss_type=-1, bc_weight=args.bc_weight))
+    losses.append(Loss(loss_type=0, bc_weight=args.bc_weight))
+    losses.append(Loss(loss_type=1, bc_weight=args.bc_weight))
+    if args.loss_type < 2:
+        print(f"Using loss: {losses[args.loss_type+1].name}")
+        chebyshev_freqs = np.round(np.linspace(args.chebyshev_freq_min, args.chebyshev_freq_max, args.levels + 1)).astype(int)
+    else:
+        chebyshev_freqs = np.round(np.linspace(args.chebyshev_freq_min, args.chebyshev_freq_max, args.levels)).astype(int)
+        chebyshev_freqs = np.insert(chebyshev_freqs, 0, args.chebyshev_freq_min) # first level for DRM use only min frequency
+
     # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
     # 1-D mesh
@@ -636,6 +643,7 @@ def main(args=None):
     # Input and output dimension: x -> u(x)
     dim_inputs = 1
     dim_outputs = 1
+
     model = MultiLevelNN(mesh=mesh,
                          num_levels=args.levels,
                          dim_inputs=dim_inputs, dim_outputs=dim_outputs,
@@ -645,8 +653,7 @@ def main(args=None):
                          g0_type=args.bc_extension,
                          d_type=args.distance,
                          use_chebyshev_basis=args.use_chebyshev_basis,
-                         chebyshev_freq_min=args.chebyshev_freq_min,
-                         chebyshev_freq_max=args.chebyshev_freq_max)
+                         chebyshev_freqs=chebyshev_freqs)
     print(model)
     model.to(device)
     # Plotting
@@ -672,7 +679,16 @@ def main(args=None):
             scale = lev + 1
             model.set_scale(level_idx=lev, scale=scale)
             # Crank that !@#$ up
-            train(model=model, mesh=mesh, criterion=loss, iterations=args.epochs,
+            if args.loss_type < 2:
+                loss = losses[args.loss_type+1]
+            else:
+                if lev == 0: # DRM
+                    loss = losses[2]
+                    epochs = args.drm_epochs
+                else: # PINN
+                    loss = losses[1]
+                    epochs = args.epochs
+            train(model=model, mesh=mesh, criterion=loss, iterations=epochs,
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)

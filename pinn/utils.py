@@ -60,6 +60,8 @@ def parse_args(args=None):
                         help="Number of training epochs per sweep.")
     parser.add_argument('--adam_epochs', type=int, default=None,
                         help="Number of training epochs using Adam per sweep. Defaults to --epochs if not set.")
+    parser.add_argument('--drm_epochs', type=int, default=None,
+                        help="Number of training epochs using DRM in the first level of mixed training. Defaults to --epochs if not set.")
     parser.add_argument('--sweeps', type=int, default=2,
                         help="Number of multilevel outer sweeps.")
     parser.add_argument('--hidden_dims', type=int, nargs='+', default=[64, 64],
@@ -78,8 +80,8 @@ def parse_args(args=None):
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
-    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1],
-                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
+    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1, 2],
+                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss, 1 for DRM loss, 2 for mixed.")
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
@@ -117,6 +119,9 @@ def parse_args(args=None):
     # Set adam_epochs to epochs if not provided
     if args.adam_epochs is None:
         args.adam_epochs = args.epochs
+
+    if args.drm_epochs is None:
+        args.drm_epochs = args.epochs
 
     if (1 <= args.chebyshev_freq_min <= args.chebyshev_freq_max):
         print(f"Chebyshev basis of frequency {args.chebyshev_freq_min} to {args.chebyshev_freq_max} are used")
