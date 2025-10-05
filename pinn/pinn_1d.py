@@ -51,7 +51,7 @@ from enum import Enum
 from typing import Union, Tuple, Callable
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from cheby import chebyshev_transformed_features, chebyshev_transformed_features2, generate_chebyshev_features, generate_chebyshev_features2 # noqa F401
+from cheby import chebyshev_transformed_features, generate_chebyshev_features # noqa F401
 from datetime import datetime
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
@@ -303,10 +303,7 @@ class Level(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_chebyshev_basis:
-            #x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
-            #x_features = chebyshev_transformed_features2(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
-            #x_features = generate_chebyshev_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
-            x_features = generate_chebyshev_features2(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            x_features = generate_chebyshev_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
         else:
             x_features = x
 
