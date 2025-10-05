@@ -51,7 +51,8 @@ from enum import Enum
 from typing import Union, Tuple, Callable
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from cheby import chebyshev_transformed_features, chebyshev_transformed_features2 # noqa F401
+from cheby import chebyshev_transformed_features, chebyshev_transformed_features2, generate_chebyshev_features, generate_chebyshev_features2 # noqa F401
+from datetime import datetime
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -134,7 +135,7 @@ def _psi_tensor(t: torch.Tensor) -> torch.Tensor:
     return torch.where(t <= 0, torch.tensor(0.0, dtype=t.dtype, device=t.device), torch.exp(-1.0 / t))
 
 def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]], 
-              d_type: str = "quadratic_bubble") -> Callable[[torch.Tensor], torch.Tensor]:
+              d_type: str = "sin_half_period") -> Callable[[torch.Tensor], torch.Tensor]:
     domain_bounds_tuple = domain_bounds
     if domain_dim == 1 and not isinstance(domain_bounds[0], (tuple, list)):
         domain_bounds_tuple = (domain_bounds,)
@@ -270,7 +271,6 @@ class Mesh:
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
 
-
 # %%
 # Define one level NN
 class Level(nn.Module):
@@ -303,7 +303,10 @@ class Level(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_chebyshev_basis:
-            x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            #x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            #x_features = chebyshev_transformed_features2(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            #x_features = generate_chebyshev_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            x_features = generate_chebyshev_features2(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
         else:
             x_features = x
 
@@ -328,7 +331,7 @@ class LevelStatus(Enum):
 class MultiLevelNN(nn.Module):
     def __init__(self, mesh: Mesh, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
-                 g0_type: str = "multilinear", d_type: str = "quadratic_bubble",
+                 g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
                  chebyshev_freq_min: int = 0,
                  chebyshev_freq_max: int = 0) -> None:
@@ -355,12 +358,14 @@ class MultiLevelNN(nn.Module):
             )
             print(f"BCs will be enforced using g0_type: {g0_type} and d_type: {d_type}")
 
+        self.use_chebyshev_basis = use_chebyshev_basis
+        self.chebyshev_freqs = np.round(np.linspace(chebyshev_freq_min, chebyshev_freq_max, num_levels + 1)).astype(int)
         self.models = nn.ModuleList([
             Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
                   use_chebyshev_basis=use_chebyshev_basis,
-                  chebyshev_freq_min=chebyshev_freq_min,
-                  chebyshev_freq_max=chebyshev_freq_max)
-            for _ in range(num_levels)
+                  chebyshev_freq_min=self.chebyshev_freqs[i],
+                  chebyshev_freq_max=self.chebyshev_freqs[i+1])
+            for i in range(num_levels)
             ])
         
         # All levels start as "off"
@@ -418,7 +423,10 @@ class MultiLevelNN(nn.Module):
         ys = []
         for i, model in enumerate(self.models):
             if self.level_status[i] != LevelStatus.OFF:
-                x_scale = self.scales[i] * x
+                if self.use_chebyshev_basis:
+                    x_scale = x 
+                else:
+                    x_scale = self.scales[i] * x
                 y = model.forward(x=x_scale)
                 ys.append(y)
         if not ys:
@@ -443,6 +451,10 @@ class MultiLevelNN(nn.Module):
         if self.enforce_bc:
             g0_vals = self.g0_func(x)
             d_vals = self.d_func(x)
+            mask = torch.abs(d_vals) < 1e-8
+            signs = torch.sign(d_vals)
+            replacement = signs * 1e-8
+            d_vals = torch.where(mask, replacement, d_vals)
             y = g0_vals + d_vals * y
 
         return y
@@ -453,7 +465,6 @@ class MultiLevelNN(nn.Module):
     #        m.bias.data.fill_(0.01)
     #    if type(m) == nn.Linear:
     #        torch.nn.init.xavier_uniform(m.weight)  #
-
 
 # %%
 # Define Loss
@@ -501,22 +512,18 @@ class Loss:
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
-        xs = mesh.x_train.requires_grad_(True)
-        u = model.get_solution(xs)
-        grad_u_pred = torch.autograd.grad(u, xs,
-                                          grad_outputs=torch.ones_like(u),
-                                          create_graph=True)[0]
+        if not model.enforce_bc:
+            raise NotImplementedError("Deep Ritz loss only supports enforce_bc")
 
-        u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
-        grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
+        x = mesh.x_train.requires_grad_(True)
+        u = model.get_solution(x)
+        du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
 
-        f_val = mesh.pde.f(xs)
-        fu_prod = f_val * u
+        du_dx_sq = torch.sum(du_dx**2, dim=1, keepdim=True)
 
-        integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
-        loss = torch.mean(integrand_values)
+        #loss = torch.mean(0.5 * du_dx_sq[1:-1] + 0.5 * mesh.pde.r * u[1:-1]**2 - mesh.f[1:-1] * u[1:-1])
+        loss = torch.mean(0.5 * du_dx_sq + 0.5 * mesh.pde.r * u**2 - mesh.f * u)
 
-        xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
 
     def loss(self, model, mesh):
@@ -529,7 +536,6 @@ class Loss:
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
-
 
 # %%
 # Define the training loop
@@ -550,6 +556,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
     for i in range(iterations):
         if i == adam_iterations:
+        #if i == adam_iterations and not model.enforce_bc:
             use_lbfgs = True
             optimizer = optim.LBFGS(model.parameters(), lr=learning_rate,
                                     max_iter=20, tolerance_grad=1e-7, history_size=100)
@@ -570,6 +577,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
             loss.backward()
+
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
@@ -605,6 +613,10 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 # %%
 # Define the main function
 def main(args=None):
+    # Register run by timestamp
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(f"results_pinn_1d_{ts}", exist_ok=True)
+
     # For reproducibility
     torch.manual_seed(0)
     # Parse args
@@ -612,7 +624,7 @@ def main(args=None):
     # Ensure chebyshev_freq_max is at least chebyshev_freq_min for range to be valid
     if args.use_chebyshev_basis and args.chebyshev_freq_max < args.chebyshev_freq_min:
         raise ValueError("chebyshev_freq_max must be >= chebyshev_freq_min when using Chebyshev basis.")
-    print_args(args=args)
+    print_args(args=args, output_file=f"results_pinn_1d_{ts}/args.txt")
     # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
@@ -642,7 +654,7 @@ def main(args=None):
     print(model)
     model.to(device)
     # Plotting
-    frame_dir = "./frames"
+    frame_dir = f"results_pinn_1d_{ts}/frames"
     os.makedirs(frame_dir, exist_ok=True)
     if args.clear:
         cleanfiles(frame_dir)
@@ -683,7 +695,7 @@ def main(args=None):
 # can run it like normal: python filename.py
 if __name__ == "__main__":
     if is_notebook():
-        err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot', '--enforce_bc', '--g0_type', 'hermite_cubic_2nd_deriv', '--d_type', 'quadratic_bubble'])
+        err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot', '--enforce_bc', '--g0_type', 'hermite_cubic_2nd_deriv', '--d_type', 'sin_half_period'])
     else:
         err = main()
     try:

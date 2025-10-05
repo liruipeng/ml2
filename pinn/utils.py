@@ -175,11 +175,16 @@ def scheduler_step(scheduler, loss, epoch=None):
 
 
 # %%
-def print_args(args):
+def print_args(args, output_file=None):
+    if output_file:
+        f = open(output_file, 'w')
+    else:
+        f = None
     print("Options used:")
     for key, value in vars(args).items():
         print(f"   --{key}: {value}")
-
+        if f:
+            print(f"   --{key}: {value}", file=f)
 
 # %%
 def get_activation(name: str):
