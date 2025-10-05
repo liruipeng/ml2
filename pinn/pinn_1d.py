@@ -553,7 +553,6 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
     for i in range(iterations):
         if i == adam_iterations:
-        #if i == adam_iterations and not model.enforce_bc:
             use_lbfgs = True
             optimizer = optim.LBFGS(model.parameters(), lr=learning_rate,
                                     max_iter=20, tolerance_grad=1e-7, history_size=100)
