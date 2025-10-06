@@ -642,6 +642,11 @@ def main(args=None):
         chebyshev_freq_min = np.ones(args.levels, dtype=int) * -1
         chebyshev_freq_max = np.ones(args.levels, dtype=int) * -1
 
+    if len(args.epochs) == 1:
+        epochs = np.ones(args.levels, dtype=int) * args.epochs
+    else:
+        epochs = np.array(args.epochs).astype(int)
+
     # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
     # 1-D mesh
@@ -690,15 +695,12 @@ def main(args=None):
             # Crank that !@#$ up
             if args.loss_type < 2:
                 loss = losses[args.loss_type+1]
-                epochs = args.epochs
             else:
                 if lev == 0: # DRM
                     loss = losses[2]
-                    epochs = args.drm_epochs
                 else: # PINN
                     loss = losses[1]
-                    epochs = args.epochs
-            train(model=model, mesh=mesh, criterion=loss, iterations=epochs,
+            train(model=model, mesh=mesh, criterion=loss, iterations=epochs[lev],
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
