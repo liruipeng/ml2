@@ -330,7 +330,8 @@ class MultiLevelNN(nn.Module):
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
                  g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
-                 chebyshev_freqs: np.ndarray = None) -> None:
+                 chebyshev_freq_min: np.ndarray = None, 
+                 chebyshev_freq_max: np.ndarray = None) -> None:
         super().__init__()
         self.mesh = mesh
         # currently the same model on each level
@@ -358,8 +359,8 @@ class MultiLevelNN(nn.Module):
         self.models = nn.ModuleList([
             Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
                   use_chebyshev_basis=use_chebyshev_basis,
-                  chebyshev_freq_min=chebyshev_freqs[i],
-                  chebyshev_freq_max=chebyshev_freqs[i+1])
+                  chebyshev_freq_min=chebyshev_freq_min[i],
+                  chebyshev_freq_max=chebyshev_freq_max[i])
             for i in range(num_levels)
             ])
         
@@ -615,9 +616,6 @@ def main(args=None):
     torch.manual_seed(0)
     # Parse args
     args = parse_args(args=args)
-    # Ensure chebyshev_freq_max is at least chebyshev_freq_min for range to be valid
-    if args.use_chebyshev_basis and args.chebyshev_freq_max < args.chebyshev_freq_min:
-        raise ValueError("chebyshev_freq_max must be >= chebyshev_freq_min when using Chebyshev basis.")
     print_args(args=args, output_file=f"results_pinn_1d_{ts}/args.txt")
     # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
@@ -627,12 +625,22 @@ def main(args=None):
     losses.append(Loss(loss_type=-1, bc_weight=args.bc_weight))
     losses.append(Loss(loss_type=0, bc_weight=args.bc_weight))
     losses.append(Loss(loss_type=1, bc_weight=args.bc_weight))
-    if args.loss_type < 2:
-        print(f"Using loss: {losses[args.loss_type+1].name}")
-        chebyshev_freqs = np.round(np.linspace(args.chebyshev_freq_min, args.chebyshev_freq_max, args.levels + 1)).astype(int)
+
+    if args.use_chebyshev_basis:
+        if len(args.chebyshev_freq_min) == 1:
+            chebyshev_freq_min = np.ones(args.levels, dtype=int) * args.chebyshev_freq_min
+        else:
+            chebyshev_freq_min = np.array(args.chebyshev_freq_min).astype(int)
+        print(f"Chebyshev frequencies lower bounds = {chebyshev_freq_min}")
+
+        if len(args.chebyshev_freq_max) == 1:
+            chebyshev_freq_max = np.ones(args.levels, dtype=int) * args.chebyshev_freq_max
+        else:
+            chebyshev_freq_max = np.array(args.chebyshev_freq_max).astype(int)
+        print(f"Chebyshev frequencies upper bounds = {chebyshev_freq_max}")
     else:
-        chebyshev_freqs = np.round(np.linspace(args.chebyshev_freq_min, args.chebyshev_freq_max, args.levels)).astype(int)
-        chebyshev_freqs = np.insert(chebyshev_freqs, 0, args.chebyshev_freq_min) # first level for DRM use only min frequency
+        chebyshev_freq_min = None
+        chebyshev_freq_max = None
 
     # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
@@ -653,7 +661,8 @@ def main(args=None):
                          g0_type=args.bc_extension,
                          d_type=args.distance,
                          use_chebyshev_basis=args.use_chebyshev_basis,
-                         chebyshev_freqs=chebyshev_freqs)
+                         chebyshev_freq_min=chebyshev_freq_min,
+                         chebyshev_freq_max=chebyshev_freq_max)
     print(model)
     model.to(device)
     # Plotting
