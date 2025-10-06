@@ -690,6 +690,7 @@ def main(args=None):
             # Crank that !@#$ up
             if args.loss_type < 2:
                 loss = losses[args.loss_type+1]
+                epochs = args.epochs
             else:
                 if lev == 0: # DRM
                     loss = losses[2]
