@@ -639,8 +639,8 @@ def main(args=None):
             chebyshev_freq_max = np.array(args.chebyshev_freq_max).astype(int)
         print(f"Chebyshev frequencies upper bounds = {chebyshev_freq_max}")
     else:
-        chebyshev_freq_min = None
-        chebyshev_freq_max = None
+        chebyshev_freq_min = np.ones(args.levels, dtype=int) * -1
+        chebyshev_freq_max = np.ones(args.levels, dtype=int) * -1
 
     # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
