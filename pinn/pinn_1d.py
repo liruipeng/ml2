@@ -51,7 +51,7 @@ from enum import Enum
 from typing import Union, Tuple, Callable
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from cheby import chebyshev_transformed_features, generate_chebyshev_features # noqa F401
+from cheby import generate_chebyshev_features
 from datetime import datetime
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
@@ -134,7 +134,7 @@ def get_g0_func(
 def _psi_tensor(t: torch.Tensor) -> torch.Tensor:
     return torch.where(t <= 0, torch.tensor(0.0, dtype=t.dtype, device=t.device), torch.exp(-1.0 / t))
 
-def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]], 
+def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]],
               d_type: str = "sin_half_period") -> Callable[[torch.Tensor], torch.Tensor]:
     domain_bounds_tuple = domain_bounds
     if domain_dim == 1 and not isinstance(domain_bounds[0], (tuple, list)):
@@ -364,7 +364,7 @@ class MultiLevelNN(nn.Module):
                   chebyshev_freq_max=self.chebyshev_freqs[i+1])
             for i in range(num_levels)
             ])
-        
+
         # All levels start as "off"
         self.level_status = [LevelStatus.OFF] * num_levels
 
@@ -421,7 +421,7 @@ class MultiLevelNN(nn.Module):
         for i, model in enumerate(self.models):
             if self.level_status[i] != LevelStatus.OFF:
                 if self.use_chebyshev_basis:
-                    x_scale = x 
+                    x_scale = x
                 else:
                     x_scale = self.scales[i] * x
                 y = model.forward(x=x_scale)
@@ -436,7 +436,7 @@ class MultiLevelNN(nn.Module):
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
-        
+
         n_active = self.num_active_levels()
         # reshape to [batch_size, num_levels, dim_outputs]
         # and sum over levels
