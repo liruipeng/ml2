@@ -3,7 +3,10 @@ from typing import Union, Tuple, Callable
 import itertools
 
 # %% [markdown]
-# Helper functions from the new BC implementation
+# Helper functions from BC implementation
+# The approach to enforce BC is
+# $$u(x) = g_0(x) + d(x) u_{NN}(x)$$
+# where $g_0$ satisfies BC at the boundary and $d$ is zero at the boundary.
 
 # %%
 def _calculate_laplacian_1d(func: Callable[[torch.Tensor], torch.Tensor], x_val: float) -> torch.Tensor:
@@ -118,7 +121,8 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
         return d_inf_smooth_bump_val
 
     if d_type == "abs_dist_complement":
-        if domain_dim != 1: raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
+        if domain_dim != 1:
+            raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
         def d_abs_dist_complement_val(x: torch.Tensor) -> torch.Tensor:
             x_val = x[:, 0]
             x_norm = (x_val - min_bounds[0]) / domain_length
@@ -127,7 +131,8 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
         return d_abs_dist_complement_val
 
     if d_type == "ratio_bubble_dist":
-        if domain_dim != 1: raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
+        if domain_dim != 1:
+            raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
         def d_ratio_bubble_dist_val(x: torch.Tensor) -> torch.Tensor:
             x_val = x[:, 0]
             x_norm = (x_val - min_bounds[0]) / domain_length
@@ -137,12 +142,16 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
         return d_ratio_bubble_dist_val
 
     if d_type == "sin_half_period":
-        if domain_dim != 1: raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
-        if domain_length is None: raise ValueError("Domain length must be defined for 'sin_half_period' d_type.")
+        if domain_dim != 1:
+            raise ValueError(f"d_type '{d_type}' is only supported for 1D problems.")
+        if domain_length is None:
+            raise ValueError("Domain length must be defined for 'sin_half_period' d_type.")
         def d_sin_half_period_val(x: torch.Tensor) -> torch.Tensor:
             x_val = x[:, 0]
             argument = (torch.pi / domain_length) * (x_val - min_bounds[0])
             return torch.sin(argument).unsqueeze(1)
         return d_sin_half_period_val
 
-    raise ValueError(f"Unknown d_type: {d_type}. Choose from 'quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', 'ratio_bubble_dist', or 'sin_half_period'.")
+    raise ValueError(f"Unknown d_type: {d_type}."
+                     "Choose from 'quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', "
+                     "'ratio_bubble_dist', or 'sin_half_period'.")
