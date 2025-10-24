@@ -49,7 +49,9 @@ import numpy as np
 from enum import Enum
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from cheby import chebyshev_transformed_features, chebyshev_transformed_features2 # noqa F401
+from cheby import generate_chebyshev_features
+from bc import get_d_func, get_g0_func
+from datetime import datetime
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -115,7 +117,9 @@ class Mesh:
         self.x_train = torch.linspace(self.ax, self.bx, self.ntrain + 1, device=device)[:-1].unsqueeze(-1)
         self.x_eval = torch.linspace(self.ax, self.bx, self.neval + 1, device=device)[:-1].unsqueeze(-1)
         self.pde = None
+        # source term
         self.f = None
+        # analytical solution
         self.u_ex = None
 
     def set_pde(self, pde: PDE):
@@ -124,7 +128,6 @@ class Mesh:
         self.f = pde.f(self.x_train)
         # analytical solution
         self.u_ex = pde.u_ex(self.x_train)
-
 
 # %%
 # Define one level NN
@@ -158,7 +161,7 @@ class Level(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_chebyshev_basis:
-            x_features = chebyshev_transformed_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
+            x_features = generate_chebyshev_features(x, self.chebyshev_freq_min, self.chebyshev_freq_max)
         else:
             x_features = x
 
@@ -183,22 +186,42 @@ class LevelStatus(Enum):
 class MultiLevelNN(nn.Module):
     def __init__(self, mesh: Mesh, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
+                 g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
                  chebyshev_freq_min: int = 0,
                  chebyshev_freq_max: int = 0) -> None:
         super().__init__()
         self.mesh = mesh
         # currently the same model on each level
-        self.models = nn.ModuleList([
-            Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
-                  use_chebyshev_basis=use_chebyshev_basis,
-                  chebyshev_freq_min=chebyshev_freq_min,
-                  chebyshev_freq_max=chebyshev_freq_max)
-            for _ in range(num_levels)
-            ])
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
         self.enforce_bc = enforce_bc
+
+        self.g0_func = None
+        self.d_func = None
+        if self.enforce_bc:
+            self.g0_func = get_g0_func(
+                u_exact_func=self.mesh.pde.u_ex,
+                domain_dim=1,
+                domain_bounds=(self.mesh.ax, self.mesh.bx),
+                g0_type=g0_type
+            )
+            self.d_func = get_d_func(
+                domain_dim=1,
+                domain_bounds=(self.mesh.ax, self.mesh.bx),
+                d_type=d_type
+            )
+            print(f"BCs will be enforced using g0_type: {g0_type} and d_type: {d_type}")
+
+        self.use_chebyshev_basis = use_chebyshev_basis
+        self.chebyshev_freqs = np.round(np.linspace(chebyshev_freq_min, chebyshev_freq_max, num_levels + 1)).astype(int)
+        self.models = nn.ModuleList([
+            Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
+                  use_chebyshev_basis=use_chebyshev_basis,
+                  chebyshev_freq_min=self.chebyshev_freqs[i],
+                  chebyshev_freq_max=self.chebyshev_freqs[i+1])
+            for i in range(num_levels)
+            ])
 
         # All levels start as "off"
         self.level_status = [LevelStatus.OFF] * num_levels
@@ -255,7 +278,10 @@ class MultiLevelNN(nn.Module):
         ys = []
         for i, model in enumerate(self.models):
             if self.level_status[i] != LevelStatus.OFF:
-                x_scale = self.scales[i] * x
+                if self.use_chebyshev_basis:
+                    x_scale = x
+                else:
+                    x_scale = self.scales[i] * x
                 y = model.forward(x=x_scale)
                 ys.append(y)
         if not ys:
@@ -268,6 +294,7 @@ class MultiLevelNN(nn.Module):
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
+
         n_active = self.num_active_levels()
         # reshape to [batch_size, num_levels, dim_outputs]
         # and sum over levels
@@ -275,12 +302,16 @@ class MultiLevelNN(nn.Module):
             y = y.view(-1, n_active, self.dim_outputs)
             y = y.sum(dim=1)  # shape: (n, dim_outputs)
         #
+
         if self.enforce_bc:
-            g0 = self.mesh.u_ex[0].item()
-            g1 = self.mesh.u_ex[-1].item()
-            # in domain x in [0, 1]
-            y = g0 * (1 - x) + g1 * x + x * (1 - x) * y
-            # y = g0 + (x-0)/(1-0)*(g1 - g0) + (1 - torch.exp(0-x)) * (1 - torch.exp(x-1)) * y
+            g0_vals = self.g0_func(x)
+            d_vals = self.d_func(x)
+            mask = torch.abs(d_vals) < 1e-8
+            signs = torch.sign(d_vals)
+            replacement = signs * 1e-8
+            d_vals = torch.where(mask, replacement, d_vals)
+            y = g0_vals + d_vals * y
+
         return y
 
     # def _init_weights(self, m):
@@ -289,7 +320,6 @@ class MultiLevelNN(nn.Module):
     #        m.bias.data.fill_(0.01)
     #    if type(m) == nn.Linear:
     #        torch.nn.init.xavier_uniform(m.weight)  #
-
 
 # %%
 # Define Loss
@@ -325,6 +355,7 @@ class Loss:
         # Internal loss
         pde = mesh.pde
         loss = loss_func(d2u_dx2[1:-1] + mesh.f[1:-1], pde.r * u[1:-1])
+
         # Boundary loss
         if not model.enforce_bc:
             u_bc = u[[0, -1]]
@@ -336,29 +367,18 @@ class Loss:
 
     def drm_loss(self, model, mesh: Mesh):
         """Deep Ritz Method loss"""
-        xs = mesh.x_train.requires_grad_(True)
-        u = model(xs)
+        if not model.enforce_bc:
+            raise NotImplementedError("Deep Ritz loss only supports enforce_bc")
 
-        grad_u_pred = torch.autograd.grad(u, xs,
-                                          grad_outputs=torch.ones_like(u),
-                                          create_graph=True)[0]
+        x = mesh.x_train.requires_grad_(True)
+        u = model.get_solution(x)
+        du_dx, = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)
 
-        u_pred_sq = torch.sum(u**2, dim=1, keepdim=True)
-        grad_u_pred_sq = torch.sum(grad_u_pred**2, dim=1, keepdim=True)
+        du_dx_sq = torch.sum(du_dx**2, dim=1, keepdim=True)
 
-        f_val = mesh.pde.f(xs)
-        fu_prod = f_val * u
+        #loss = torch.mean(0.5 * du_dx_sq[1:-1] + 0.5 * mesh.pde.r * u[1:-1]**2 - mesh.f[1:-1] * u[1:-1])
+        loss = torch.mean(0.5 * du_dx_sq + 0.5 * mesh.pde.r * u**2 - mesh.f * u)
 
-        integrand_values = 0.5 * grad_u_pred_sq[1:-1] + 0.5 * mesh.pde.r * u_pred_sq[1:-1] - fu_prod[1:-1]
-        loss = torch.mean(integrand_values)
-
-        # Boundary loss
-        u_bc = u[[0, -1]]
-        u_ex_bc = mesh.u_ex[[0, -1]]
-        loss_b = self.loss_func(u_bc, u_ex_bc)
-        loss += self.bc_weight * loss_b
-
-        xs.requires_grad_(False)  # Disable gradient tracking for x
         return loss
 
     def loss(self, model, mesh):
@@ -371,7 +391,6 @@ class Loss:
         else:
             raise ValueError(f"Unknown loss type: {self.type}")
         return loss_value
-
 
 # %%
 # Define the training loop
@@ -412,6 +431,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             # backpropagation to compute gradients of model param respect to the loss. computes dloss/dx
             # for every parameter x which has requires_grad=True.
             loss.backward()
+
             # update the model param doing an optim step using the computed gradients and learning rate
             optimizer.step()
             #
@@ -447,6 +467,10 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 # %%
 # Define the main function
 def main(args=None):
+    # Register run by timestamp
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(f"results_pinn_1d_{ts}", exist_ok=True)
+
     # For reproducibility
     torch.manual_seed(0)
     # Parse args
@@ -454,7 +478,7 @@ def main(args=None):
     # Ensure chebyshev_freq_max is at least chebyshev_freq_min for range to be valid
     if args.use_chebyshev_basis and args.chebyshev_freq_max < args.chebyshev_freq_min:
         raise ValueError("chebyshev_freq_max must be >= chebyshev_freq_min when using Chebyshev basis.")
-    print_args(args=args)
+    print_args(args=args, output_file=f"results_pinn_1d_{ts}/args.txt")
     # PDE
     pde = PDE(high=args.high_freq, mu=args.mu, r=args.gamma,
               problem=args.problem_id)
@@ -476,13 +500,15 @@ def main(args=None):
                          dim_hidden=args.hidden_dims,
                          act=get_activation(args.activation),
                          enforce_bc=args.enforce_bc,
+                         g0_type=args.bc_extension,
+                         d_type=args.distance,
                          use_chebyshev_basis=args.use_chebyshev_basis,
                          chebyshev_freq_min=args.chebyshev_freq_min,
                          chebyshev_freq_max=args.chebyshev_freq_max)
     print(model)
     model.to(device)
     # Plotting
-    frame_dir = "./frames"
+    frame_dir = f"results_pinn_1d_{ts}/frames"
     os.makedirs(frame_dir, exist_ok=True)
     if args.clear:
         cleanfiles(frame_dir)
@@ -523,7 +549,7 @@ def main(args=None):
 # can run it like normal: python filename.py
 if __name__ == "__main__":
     if is_notebook():
-        err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot'])
+        err = main(['--levels', '4', '--epochs', '10000', '--sweeps', '1', '--plot', '--enforce_bc', '--g0_type', 'hermite_cubic_2nd_deriv', '--d_type', 'sin_half_period'])
     else:
         err = main()
     try:
