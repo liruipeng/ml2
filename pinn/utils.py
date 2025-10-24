@@ -56,7 +56,7 @@ def parse_args(args=None):
                         help="Number of evaluation checkpoints during training.")
     parser.add_argument('--num_plots', type=int, default=10,
                         help="Number of plotting points during training.")
-    parser.add_argument('--epochs', type=int, default=10000,
+    parser.add_argument('--epochs', type=int, nargs='+', default=10000,
                         help="Number of training epochs per sweep.")
     parser.add_argument('--adam_epochs', type=int, default=None,
                         help="Number of training epochs using Adam per sweep. Defaults to --epochs if not set.")
@@ -78,20 +78,24 @@ def parse_args(args=None):
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
-    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1],
-                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss.")
+    parser.add_argument('--loss_type', type=int, default=0, choices=[-1, 0, 1, 2],
+                        help="Loss type: -1 for supervised (true solution), 0 for PINN loss, 1 for DRM loss, 2 for mixed.")
     parser.add_argument('--activation', type=str, default='tanh',
                         choices=['tanh', 'silu', 'relu', 'gelu', 'softmax'],
                         help="Activation function to use.")
+    parser.add_argument('--enforce_bc', action='store_true',
+                        help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_extension', type=str, default='hermite_cubic_2nd_deriv', 
                         choices=['multilinear', 'hermite_cubic_2nd_deriv'],
                         help='Boundary value extension function.')
     parser.add_argument('--distance', type=str, default='sin_half_period', 
                         choices=['quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', 'ratio_bubble_dist', 'sin_half_period'],
                         help='Distance function.')
-    parser.add_argument('--chebyshev_freq_min', type=int, default=-1,
+    parser.add_argument('--use_chebyshev_basis', action='store_true',
+                        help="If set, use Chebyshev features.")
+    parser.add_argument('--chebyshev_freq_min', type=int, nargs='+',
                         help='Minimum frequency for Chebyshev polynomials.')
-    parser.add_argument('--chebyshev_freq_max', type=int, default=-1,
+    parser.add_argument('--chebyshev_freq_max', type=int, nargs='+',
                         help='Maximum frequency for Chebyshev polynomials.')
     parser.add_argument('--plot', action='store_true',
                         help="If set, generate plots during or after training.")
@@ -99,8 +103,6 @@ def parse_args(args=None):
                         help="If set, do not remove plot files generated before.")
     parser.add_argument('--problem_id', type=int, default=1, choices=[1, 2],
                         help="PDE problem to solve: 1 or 2.")
-    parser.add_argument('--enforce_bc', action='store_true',
-                        help="If set, enforce the BC in solution.")
     parser.add_argument('--bc_weight', type=float, default=1.0,
                         help="Weight for the loss of BC.")
     parser.add_argument("--scheduler", type=str, default="StepLR",
@@ -117,12 +119,6 @@ def parse_args(args=None):
     # Set adam_epochs to epochs if not provided
     if args.adam_epochs is None:
         args.adam_epochs = args.epochs
-
-    if (1 <= args.chebyshev_freq_min <= args.chebyshev_freq_max):
-        print(f"Chebyshev basis of frequency {args.chebyshev_freq_min} to {args.chebyshev_freq_max} are used")
-        args.use_chebyshev_basis = True
-    else:
-        args.use_chebyshev_basis = False
 
     return args
 
