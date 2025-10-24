@@ -51,7 +51,8 @@ from enum import Enum
 from typing import Union, Tuple, Callable
 from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
-from cheby import chebyshev_transformed_features, generate_chebyshev_features # noqa F401
+from cheby import generate_chebyshev_features
+from bc import get_d_func, get_g0_func
 from datetime import datetime
 # from SOAP.soap import SOAP
 # torch.set_default_dtype(torch.float64)
@@ -420,7 +421,7 @@ class MultiLevelNN(nn.Module):
         for i, model in enumerate(self.models):
             if self.level_status[i] != LevelStatus.OFF:
                 if self.use_chebyshev_basis:
-                    x_scale = x 
+                    x_scale = x
                 else:
                     x_scale = self.scales[i] * x
                 y = model.forward(x=x_scale)
@@ -435,7 +436,7 @@ class MultiLevelNN(nn.Module):
 
     def get_solution(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
-        
+
         n_active = self.num_active_levels()
         # reshape to [batch_size, num_levels, dim_outputs]
         # and sum over levels
