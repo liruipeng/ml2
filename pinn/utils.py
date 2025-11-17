@@ -18,7 +18,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
-from scipy.fft import rfft, rfftfreq
+from scipy.fft import rfft, rfftfreq, dst
 import numpy as np
 import torch
 import ast
@@ -97,6 +97,8 @@ def parse_args(args=None):
                         help='Minimum frequency for Chebyshev polynomials.')
     parser.add_argument('--chebyshev_freq_max', type=int, nargs='+',
                         help='Maximum frequency for Chebyshev polynomials.')
+    parser.add_argument('--track_freqs', type=int, nargs='+', default=[0, 1, 2, 3, 4, 5, 6, 7],
+                    help="Integer array of frequencies (modes) whose coefficients will be tracked and plotted over epochs.")
     parser.add_argument('--plot', action='store_true',
                         help="If set, generate plots during or after training.")
     parser.add_argument('--no-clear', action='store_false', dest='clear',
@@ -196,6 +198,65 @@ def get_activation(name: str):
         raise ValueError(f"Unknown activation function: {name}")
     return activations[name]()
 
+def plot_coefficient_evolution(data: list, freqs: list, sweep_idx: int, level_idx: int, frame_dir: str, analytic_freqs: np.ndarray):
+    """
+    Plots the evolution of specific Fourier/Sine coefficients over training epochs.
+    """
+    if not data:
+        print("No coefficient data collected for plotting.")
+        return
+
+    # Extract all data into a structured format
+    epochs = np.array([d['epoch'] for d in data])
+    true_coeffs = np.array([d['true_coeffs'] for d in data])
+    nn_coeffs = np.array([d['nn_coeffs'] for d in data])
+    
+    num_freqs = len(freqs)
+    
+    fig1, ax1 = plt.subplots(figsize=(10, 6))
+    ax1.set_title(f"Sweep {sweep_idx}, Level {level_idx}: Fourier Coefficient Evolution")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Coefficient Magnitude")
+
+    for i in range(num_freqs):
+        # Plot true coefficient (should be constant)
+        ax1.plot(epochs, true_coeffs[:, i], 
+                 label=f"True (Freq = {freqs[i]} pi)", 
+                 linestyle='--', alpha=0.7)
+        # Plot NN coefficient evolution
+        ax1.plot(epochs, nn_coeffs[:, i], 
+                 label=f"NN (Freq = {freqs[i]} pi)", 
+                 linestyle='-')
+
+    ax1.legend(loc='best')
+    
+    iters_str = f"Sweep{sweep_idx:02d}_Lvl{level_idx:02d}"
+    filename1 = os.path.join(frame_dir, f"Coeffs_Evolution_{iters_str}.png")
+    fig1.savefig(filename1)
+    plt.close(fig1)
+
+    print(f"  Coefficient evolution plot saved to {filename1}")
+
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    ax2.set_title(f"Sweep {sweep_idx}, Level {level_idx}: Coefficient Error Evolution")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Absolute Error (|True - NN|)")
+
+    error_coeffs = np.abs(true_coeffs - nn_coeffs)
+
+    for i in range(num_freqs):
+        ax2.plot(epochs, error_coeffs[:, i], 
+                 label=f"Freq = {freqs[i]} pi", 
+                 linestyle='-')
+        
+    ax2.legend(loc='best')
+    ax2.set_yscale('log')
+    
+    filename2 = os.path.join(frame_dir, f"Coeffs_Error_Evolution_{iters_str}.png")
+    fig2.savefig(filename2)
+    plt.close(fig2)
+
+    print(f"  Coefficient error plot saved to {filename2}")
 
 # %%
 def save_frame(x, t, y, xs, ys, iteration, title, frame_dir):
@@ -249,7 +310,7 @@ def make_video_from_frames(frame_dir, name_prefix, output_file, fps=10):
 
 
 # %%
-def fourier_analysis(x, y):
+def fourier_analysis(x, y, sine_series: bool = False):
     """
     Compute the magnitude spectrum using the Fast Fourier Transform (FFT).
     Ref: https://docs.scipy.org/doc/scipy/tutorial/fft.html
@@ -268,12 +329,22 @@ def fourier_analysis(x, y):
     N = len(x)
     # Sampling interval
     Ts = dx[0]
-    yf = rfft(y)
-    xf = rfftfreq(N, Ts)
-    yf *= 2.0 / N
-    # Correct scaling for DC and Nyquist (they should not be doubled)
-    yf[0] /= 2
-    if N % 2 == 0:
-        yf[-1] /= 2
 
-    return xf, np.abs(yf), np.real(yf), -np.imag(yf)
+    if sine_series:
+        yf = dst(y, type=1)
+        yf /= (N + 1)
+        yf = yf[:N-1]
+        L = N * Ts
+        xf = np.arange(1, N + 1) * (np.pi / L)
+        xf = xf[:N-1]
+        yf_imag = np.zeros_like(yf)
+        return xf, np.abs(yf), yf, yf_imag
+    else:
+        yf = rfft(y)
+        xf = rfftfreq(N, Ts)
+        yf *= 2.0 / N
+        # Correct scaling for DC and Nyquist (they should not be doubled)
+        yf[0] /= 2
+        if N % 2 == 0:
+            yf[-1] /= 2
+        return xf, np.abs(yf), np.real(yf), -np.imag(yf)

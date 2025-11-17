@@ -49,7 +49,7 @@ import numpy as np
 import itertools
 from enum import Enum
 from typing import Union, Tuple, Callable
-from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
+from utils import parse_args, get_activation, print_args, plot_coefficient_evolution, save_frame, make_video_from_frames
 from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
 from cheby import generate_chebyshev_features
 from bc import get_d_func, get_g0_func
@@ -537,7 +537,7 @@ class Loss:
 # %%
 # Define the training loop
 def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, num_check, num_plots, sweep_idx,
-          level_idx, frame_dir, scheduler_gen):
+          level_idx, frame_dir, scheduler_gen, track_freqs):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     # optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01,
     #                  precondition_frequency=10)
@@ -547,7 +547,34 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
     def to_np(t): return t.detach().cpu().numpy()
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
-    _, uf_analytic, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic))
+    xf_analytic, uf_analytic, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic), model.enforce_bc)
+
+    tracked_data = []
+    model.eval()
+    with torch.no_grad():
+        u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
+        u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
+        error = u_analytic - u_eval.to(u_analytic.device)
+        xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
+
+        tracked_nn_coeffs = uf_eval[track_freqs]
+        tracked_true_coeffs = uf_analytic[track_freqs]
+        tracked_data.append({
+            'epoch': 0,
+            'nn_coeffs': tracked_nn_coeffs,
+            'true_coeffs': tracked_true_coeffs
+        })
+
+        save_frame(x=xf_eval, t=uf_analytic, y=uf_eval, xs=None,  ys=None,
+                   iteration=[sweep_idx, level_idx, 0], title="Model_Frequencies", frame_dir=frame_dir)
+        save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
+                   xs=to_np(mesh.x_train), ys=to_np(u_train),
+                   iteration=[sweep_idx, level_idx, 0], title="Model_Outputs", frame_dir=frame_dir)
+        save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error), xs=None, ys=None,
+                   iteration=[sweep_idx, level_idx, 0], title="Model_Errors", frame_dir=frame_dir)
+    model.train()
+
+
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
@@ -595,16 +622,34 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
-                xf_eval, uf_eval, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval))
+                xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
+
+                tracked_nn_coeffs = uf_eval[track_freqs]
+                tracked_true_coeffs = uf_analytic[track_freqs]
+                tracked_data.append({
+                    'epoch': i + 1,
+                    'nn_coeffs': tracked_nn_coeffs,
+                    'true_coeffs': tracked_true_coeffs
+                })
+
                 save_frame(x=xf_eval, t=uf_analytic, y=uf_eval, xs=None,  ys=None,
-                           iteration=[sweep_idx, level_idx, i], title="Model_Frequencies", frame_dir=frame_dir)
+                           iteration=[sweep_idx, level_idx, i+1], title="Model_Frequencies", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
-                           iteration=[sweep_idx, level_idx, i], title="Model_Outputs", frame_dir=frame_dir)
+                           iteration=[sweep_idx, level_idx, i+1], title="Model_Outputs", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error), xs=None, ys=None,
-                           iteration=[sweep_idx, level_idx, i], title="Model_Errors", frame_dir=frame_dir)
+                           iteration=[sweep_idx, level_idx, i+1], title="Model_Errors", frame_dir=frame_dir)
             model.train()
 
+    if track_freqs:
+        plot_coefficient_evolution(
+            data=tracked_data,
+            freqs=track_freqs,
+            sweep_idx=sweep_idx,
+            level_idx=level_idx,
+            frame_dir=frame_dir,
+            analytic_freqs=xf_analytic[track_freqs]
+        )
 
 # %%
 # Define the main function
@@ -704,7 +749,7 @@ def main(args=None):
             train(model=model, mesh=mesh, criterion=loss, iterations=epochs[lev],
                   adam_iterations=args.adam_epochs,
                   learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
-                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen)
+                  sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen, track_freqs=args.track_freqs)
     # Turn PNGs into a video using OpenCV
     if args.plot:
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Outputs",
