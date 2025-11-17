@@ -49,8 +49,9 @@ import numpy as np
 import itertools
 from enum import Enum
 from typing import Union, Tuple, Callable
-from utils import parse_args, get_activation, print_args, plot_coefficient_evolution, save_frame, make_video_from_frames
-from utils import is_notebook, cleanfiles, fourier_analysis, get_scheduler_generator, scheduler_step
+from utils import parse_args, get_activation, print_args, save_frame, make_video_from_frames
+from utils import is_notebook, cleanfiles, get_scheduler_generator, scheduler_step
+from utils import error_analysis, fourier_analysis, plot_error_evolution, plot_coefficient_evolution
 from cheby import generate_chebyshev_features
 from bc import get_d_func, get_g0_func
 from datetime import datetime
@@ -546,21 +547,31 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
     def to_np(t): return t.detach().cpu().numpy()
 
+    def closure():
+        optimizer.zero_grad()
+        loss = criterion.loss(model=model, mesh=mesh)
+        loss.backward()
+        return loss
+
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
     xf_analytic, uf_analytic, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic), model.enforce_bc)
 
     tracked_data = []
+    L2_err, H1_err, H2_err = error_analysis(mesh.x_eval, u_analytic, model)
     model.eval()
     with torch.no_grad():
         u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
         u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
         error = u_analytic - u_eval.to(u_analytic.device)
-        xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
 
+        xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
         tracked_nn_coeffs = uf_eval[track_freqs]
         tracked_true_coeffs = uf_analytic[track_freqs]
         tracked_data.append({
             'epoch': 0,
+            'L2_error': L2_err,
+            'H1_error': H1_err,
+            'H2_error': H2_err,
             'nn_coeffs': tracked_nn_coeffs,
             'true_coeffs': tracked_true_coeffs
         })
@@ -584,12 +595,6 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             optimizer = optim.LBFGS(model.parameters(), lr=learning_rate,
                                     max_iter=20, tolerance_grad=1e-7, history_size=100)
 
-        def closure():
-            optimizer.zero_grad()
-            loss = criterion.loss(model=model, mesh=mesh)
-            loss.backward()
-            return loss
-
         if use_lbfgs:
             loss = optimizer.step(closure)
         else:
@@ -611,12 +616,13 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             with torch.no_grad():
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
-                print(f"Iteration {i:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e}, "
+                print(f"Iteration {i+1:6d}/{iterations:6d}, {criterion.name}: {loss.item():.4e}, "
                       f"Err 2-norm: {torch.norm(error): .4e}, "
                       f"inf-norm: {torch.max(torch.abs(error)):.4e}")
             model.train()
 
         if plot_freq > 0 and (np.remainder(i + 1, plot_freq) == 0 or i == iterations - 1):
+            L2_err, H1_err, H2_err = error_analysis(mesh.x_eval, u_analytic, model)
             model.eval()
             with torch.no_grad():
                 u_train = model.get_solution(mesh.x_train)[:, 0].unsqueeze(-1)
@@ -628,6 +634,9 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                 tracked_true_coeffs = uf_analytic[track_freqs]
                 tracked_data.append({
                     'epoch': i + 1,
+                    'L2_error': L2_err,
+                    'H1_error': H1_err,
+                    'H2_error': H2_err,
                     'nn_coeffs': tracked_nn_coeffs,
                     'true_coeffs': tracked_true_coeffs
                 })
@@ -642,6 +651,12 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
             model.train()
 
     if track_freqs:
+        plot_error_evolution(
+            data=tracked_data,
+            sweep_idx=sweep_idx,
+            level_idx=level_idx,
+            frame_dir=frame_dir
+        )
         plot_coefficient_evolution(
             data=tracked_data,
             freqs=track_freqs,

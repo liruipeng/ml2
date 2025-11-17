@@ -348,3 +348,122 @@ def fourier_analysis(x, y, sine_series: bool = False):
         if N % 2 == 0:
             yf[-1] /= 2
         return xf, np.abs(yf), np.real(yf), -np.imag(yf)
+
+# %%
+def error_analysis(x: torch.Tensor, u_true: torch.Tensor, model: torch.nn.Module) -> dict:
+    """
+    Calculates the L2, H1, and H2 relative errors of the NN solution and its derivatives 
+    against the true solution and its derivatives. Derivatives are calculated within 
+    the routine using finite differences for the true solution and automatic 
+    differentiation for the NN solution.
+
+    Args:
+        x (torch.Tensor): The 1D mesh points (must be uniformly spaced).
+        u_true (torch.Tensor): True solution values at x.
+        model (torch.nn.Module): Neural Network solution.
+        
+    Returns:
+        dict: Dictionary containing L2, H1, and H2 relative errors.
+    """
+    
+    # Ensure all inputs are column vectors (N, 1) and on the same device/dtype
+    x = x.flatten().unsqueeze(-1).clone().detach().requires_grad_(True)
+    u_true = u_true.flatten().unsqueeze(-1)
+    u_nn = model.get_solution(x)[:, 0].unsqueeze(-1)
+    
+    # Compute first derivative (u'_nn)
+    u_prime_nn_and_rest = torch.autograd.grad(
+        outputs=u_nn, 
+        inputs=x, 
+        grad_outputs=torch.ones_like(u_nn), 
+        create_graph=True, 
+        retain_graph=True
+    )
+    u_prime_nn = u_prime_nn_and_rest[0]
+    
+    # Compute second derivative (u''_nn)
+    u_double_prime_nn_and_rest = torch.autograd.grad(
+        outputs=u_prime_nn, 
+        inputs=x, 
+        grad_outputs=torch.ones_like(u_prime_nn), 
+        create_graph=False
+    )
+    u_double_prime_nn = u_double_prime_nn_and_rest[0]
+    
+    # Convert to NumPy for finite difference calculation
+    x_np = x.detach().cpu().numpy().flatten()
+    u_true_np = u_true.detach().cpu().numpy().flatten()
+    
+    # Use central finite difference (or second-order difference)
+    # The domain is assumed to be uniformly sampled based on the existing script's fourier_analysis.
+    
+    # First derivative (u'_true): gradient is a simple NumPy finite difference
+    u_prime_true_np = np.gradient(u_true_np, x_np, edge_order=2)
+    
+    # Second derivative (u''_true): gradient of the first derivative
+    u_double_prime_true_np = np.gradient(u_prime_true_np, x_np, edge_order=2)
+    
+    # Convert back to Torch Tensors
+    u_prime_true = torch.from_numpy(u_prime_true_np).float().to(u_true.device).unsqueeze(-1)
+    u_double_prime_true = torch.from_numpy(u_double_prime_true_np).float().to(u_true.device).unsqueeze(-1)
+    
+    # Relative L2 Error (u)
+    L2_error_num = torch.linalg.norm(u_true - u_nn, ord=2)
+    L2_error_den = torch.linalg.norm(u_true, ord=2)
+    L2_relative_error = (L2_error_num / L2_error_den).item()
+    
+    # Relative H1 Error (u and u')
+    H1_error_num = torch.linalg.norm(u_prime_true - u_prime_nn, ord=2)
+    H1_error_den = torch.linalg.norm(u_prime_true, ord=2)
+    H1_relative_error = (H1_error_num/ H1_error_den).item()
+    
+    # Relative H2 Error (u, u', and u'')
+    H2_error_den = torch.linalg.norm(u_double_prime_true, ord=2)
+    H2_error_num = torch.linalg.norm(u_double_prime_true - u_double_prime_nn, ord=2)
+    H2_relative_error = (H2_error_num / H2_error_den).item()
+
+    return L2_relative_error, H1_relative_error, H2_relative_error
+
+# %%
+def plot_error_evolution(data: list, sweep_idx: int, level_idx: int, frame_dir: str):
+    """
+    Plots the evolution of L2, H1, and H2 relative errors over training epochs.
+
+    Args:
+        data (list): List of dictionaries, each containing 'epoch' and error metrics.
+        sweep_idx (int): Current sweep index for file naming.
+        level_idx (int): Current level index for file naming.
+        frame_dir (str): Directory to save the plot.
+    """
+    if not data:
+        print("No error data collected for plotting.")
+        return
+
+    # Extract all data into structured numpy arrays
+    epochs = np.array([d['epoch'] for d in data])
+    l2_errors = np.array([d['L2_error'] for d in data])
+    h1_errors = np.array([d['H1_error'] for d in data])
+    h2_errors = np.array([d['H2_error'] for d in data])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot the three error metrics
+    ax.plot(epochs, l2_errors, label="L2 Relative Error", linestyle='-', marker='o', markevery=len(epochs)//10)
+    ax.plot(epochs, h1_errors, label="H1 Relative Error", linestyle='--', marker='s', markevery=len(epochs)//10)
+    ax.plot(epochs, h2_errors, label="H2 Relative Error", linestyle=':', marker='^', markevery=len(epochs)//10)
+    
+    ax.set_title(f"Sweep {sweep_idx}, Level {level_idx}: Solution Error Evolution")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Relative Error (Log Scale)")
+    
+    # Set the y-axis to a logarithmic scale, as errors typically span several orders of magnitude
+    ax.set_yscale('log')
+    ax.legend(loc='best')
+    ax.grid(True, which="both", ls="--", linewidth=0.5)
+
+    iters_str = f"Sweep{sweep_idx:02d}_Lvl{level_idx:02d}"
+    filename = os.path.join(frame_dir, f"Error_Evolution_{iters_str}.png")
+    fig.savefig(filename)
+    plt.close(fig)
+
+    print(f"  Error evolution plot saved to {filename}")
