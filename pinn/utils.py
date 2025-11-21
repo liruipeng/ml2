@@ -48,7 +48,7 @@ def is_notebook():
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Train a PINN model.")
 
-    parser.add_argument('--nx', type=int, nargs='+', default=128,
+    parser.add_argument('--nx', type=int, nargs='+', default=[128],
                         help="Number of training points in the 1D mesh.")
     parser.add_argument('--nx_eval', type=int, default=256,
                         help="Number of evaluation points in the 1D mesh.")
@@ -56,7 +56,7 @@ def parse_args(args=None):
                         help="Number of evaluation checkpoints during training.")
     parser.add_argument('--num_plots', type=int, default=10,
                         help="Number of plotting points during training.")
-    parser.add_argument('--epochs', type=int, nargs='+', default=10000,
+    parser.add_argument('--epochs', type=int, nargs='+', default=[10000],
                         help="Number of training epochs per sweep.")
     parser.add_argument('--adam_epochs', type=int, default=None,
                         help="Number of training epochs using Adam per sweep. Defaults to --epochs if not set.")
@@ -74,7 +74,7 @@ def parse_args(args=None):
                         help="Coefficient γ in the PDE: -uₓₓ + γ u = f.")
     parser.add_argument('--mu', type=float, default=70,
                         help="Oscillation parameter in the solution (PDE 2).")
-    parser.add_argument('--lr', type=float, nargs='+', default=1e-3,
+    parser.add_argument('--lr', type=float, nargs='+', default=[1e-3],
                         help="Learning rate for the optimizer.")
     parser.add_argument('--levels', type=int, default=4,
                         help="Number of levels in multilevel training.")
