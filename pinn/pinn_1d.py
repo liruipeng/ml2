@@ -711,7 +711,7 @@ def main(args=None):
     # scheduler gen takes optimizer to return scheduler
     scheduler_gen = get_scheduler_generator(args)
     # 1-D mesh
-    mesh = Mesh(ntrain=args.nx, neval=args.nx_eval, ax=args.ax, bx=args.bx)
+    mesh = Mesh(ntrain=args.nx[-1], neval=args.nx_eval, ax=args.ax, bx=args.bx)
     mesh.set_pde(pde=pde)
     # Create an instance of multilevel model
     # Input and output dimension: x -> u(x)
@@ -761,9 +761,16 @@ def main(args=None):
                     loss = losses[2]
                 else: # PINN
                     loss = losses[1]
+            if len(args.lr) > 1:
+                lr = args.lr[lev]
+            else:
+                lr = args.lr[0]
+            if len(args.nx) > 1:
+                mesh = Mesh(ntrain=args.nx[lev], neval=args.nx_eval, ax=args.ax, bx=args.bx)
+                mesh.set_pde(pde=pde)
             train(model=model, mesh=mesh, criterion=loss, iterations=epochs[lev],
                   adam_iterations=args.adam_epochs,
-                  learning_rate=args.lr, num_check=args.num_checks, num_plots=num_plots,
+                  learning_rate=lr, num_check=args.num_checks, num_plots=num_plots,
                   sweep_idx=i, level_idx=lev, frame_dir=frame_dir, scheduler_gen=scheduler_gen, track_freqs=args.track_freqs)
     # Turn PNGs into a video using OpenCV
     if args.plot:
