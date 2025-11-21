@@ -328,12 +328,14 @@ class LevelStatus(Enum):
 # %%
 # Define multilevel NN
 class MultiLevelNN(nn.Module):
-    def __init__(self, mesh: Mesh, num_levels: int, dim_inputs, dim_outputs, dim_hidden: list,
+    def __init__(self, mesh: Mesh, num_levels: int,
+                 dim_inputs, dim_outputs, dim_hidden: list,
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
                  g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
                  chebyshev_freq_min: np.ndarray = None, 
-                 chebyshev_freq_max: np.ndarray = None) -> None:
+                 chebyshev_freq_max: np.ndarray = None, 
+                 init_frozen: bool = False) -> None:
         super().__init__()
         self.mesh = mesh
         # currently the same model on each level
@@ -366,8 +368,12 @@ class MultiLevelNN(nn.Module):
             for i in range(num_levels)
             ])
         
-        # All levels start as "off"
-        self.level_status = [LevelStatus.OFF] * num_levels
+        if init_frozen:
+            # All levels start as "off"
+            self.level_status = [LevelStatus.FROZEN] * num_levels
+        else:
+            # All levels start as "off"
+            self.level_status = [LevelStatus.OFF] * num_levels
 
         # No gradients are tracked initially
         for model in self.models:
@@ -728,7 +734,8 @@ def main(args=None):
                          d_type=args.distance,
                          use_chebyshev_basis=args.use_chebyshev_basis,
                          chebyshev_freq_min=chebyshev_freq_min,
-                         chebyshev_freq_max=chebyshev_freq_max)
+                         chebyshev_freq_max=chebyshev_freq_max,
+                         init_frozen=args.init_frozen)
     print(model)
     model.to(device)
     # Plotting
