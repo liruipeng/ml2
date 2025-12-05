@@ -591,7 +591,6 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                    iteration=[sweep_idx, level_idx, 0], title="Model_Errors", frame_dir=frame_dir)
     model.train()
 
-
     check_freq = (iterations + num_check - 1) // num_check
     plot_freq = (iterations + num_plots - 1) // num_plots if num_plots > 0 else 0
 
