@@ -324,6 +324,34 @@ class LevelStatus(Enum):
     TRAIN = "train"
     FROZEN = "frozen"
 
+# %%
+# Define multievel gates
+class GatedLevel(nn.Module):
+    def __init__(self, level_idx, init_frozen, device="cuda"):
+        super().__init__()
+        self.level = level_idx
+
+        if not init_frozen:
+            # Case 1: all gates = 1.0 and never trainable
+            self.gate = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=False)
+
+        else:
+            # Case 2: init_frozen = True
+            # level 0 → gate = 1.0
+            # other levels → gate = 0.0
+            init_value = 1.0 if level_idx == 0 else 0.0
+            self.gate = nn.Parameter(torch.tensor(init_value, device=device), requires_grad=True)
+
+    def freeze_gate(self):
+        """Make this level’s gate NOT trainable."""
+        self.gate.requires_grad = False
+
+    def unfreeze_gate(self):
+        """Make this level’s gate trainable."""
+        self.gate.requires_grad = True
+
+    def forward(self, x):
+        return self.gate * x
 
 # %%
 # Define multilevel NN
@@ -333,16 +361,28 @@ class MultiLevelNN(nn.Module):
                  act: nn.Module = nn.ReLU(), enforce_bc: bool = False,
                  g0_type: str = "multilinear", d_type: str = "sin_half_period",
                  use_chebyshev_basis: bool = False,
-                 chebyshev_freq_min: np.ndarray = None, 
-                 chebyshev_freq_max: np.ndarray = None, 
+                 chebyshev_freq_min: np.ndarray = None,
+                 chebyshev_freq_max: np.ndarray = None,
                  init_frozen: bool = False) -> None:
+        """
+        Multilevel NN with per-level scalar gates.
+
+        Gate logic:
+          - if init_frozen == False:
+              * all gates = 1.0 and always non-trainable (requires_grad=False)
+          - if init_frozen == True:
+              * gate[0] = 1.0, gate[1:] = 0.0
+              * gates are trainable only when corresponding level status == TRAIN
+        """
         super().__init__()
         self.mesh = mesh
-        # currently the same model on each level
         self.dim_inputs = dim_inputs
         self.dim_outputs = dim_outputs
         self.enforce_bc = enforce_bc
+        self.use_chebyshev_basis = use_chebyshev_basis
+        self.init_frozen = init_frozen
 
+        # BC helpers (unchanged)
         self.g0_func = None
         self.d_func = None
         if self.enforce_bc:
@@ -359,43 +399,80 @@ class MultiLevelNN(nn.Module):
             )
             print(f"BCs will be enforced using g0_type: {g0_type} and d_type: {d_type}")
 
-        self.use_chebyshev_basis = use_chebyshev_basis
+        # Build level subnets (same Level class as before)
+        assert chebyshev_freq_min is not None and chebyshev_freq_max is not None, \
+            "chebyshev_freq_min/max must be provided (use -1 if unused)"
         self.models = nn.ModuleList([
             Level(dim_inputs=dim_inputs, dim_outputs=dim_outputs, dim_hidden=dim_hidden, act=act,
                   use_chebyshev_basis=use_chebyshev_basis,
                   chebyshev_freq_min=chebyshev_freq_min[i],
                   chebyshev_freq_max=chebyshev_freq_max[i])
             for i in range(num_levels)
-            ])
-        
+        ])
+
+        # Level status initialization (keeps your original convention)
         if init_frozen:
-            # All levels start as "off"
+            # all levels start as FROZEN (so OFF is different semantic)
             self.level_status = [LevelStatus.FROZEN] * num_levels
         else:
-            # All levels start as "off"
             self.level_status = [LevelStatus.OFF] * num_levels
 
-        # No gradients are tracked initially
+        # Initially disable grads for model params (will be enabled when set_status(..., TRAIN))
         for model in self.models:
             for param in model.parameters():
                 param.requires_grad = False
 
-        # Scale factor
+        # Per-level scalar gates as Parameters
+        # Use nn.ParameterList so gates are included in state_dict/parameters()
+        gates = []
+        for i in range(num_levels):
+            if not init_frozen:
+                # gates fixed at 1.0, never trainable
+                val = 1.0
+                gate = nn.Parameter(torch.tensor(float(val), dtype=torch.float32), requires_grad=False)
+            else:
+                # gate0 = 1.0, others = 0.0
+                val = 1.0
+                #val = 1.0 if i == 0 else 0.0
+                # Initially gates are NOT trainable; they become trainable only when level set to TRAIN
+                gate = nn.Parameter(torch.tensor(float(val), dtype=torch.float32), requires_grad=False)
+            gates.append(gate)
+        self.gates = nn.ParameterList(gates)
+
+        # Keep per-level input scales like original
         self.scales = [1.0] * num_levels
 
+    # ---------- status helpers ----------
     def get_status(self, level_idx: int):
         if level_idx < 0 or level_idx >= self.num_levels():
             raise IndexError(f"Level index {level_idx} is out of range")
         return self.level_status[level_idx]
 
     def set_status(self, level_idx: int, status: LevelStatus):
+        """Set level status and toggle requires_grad for model params and gate as required.
+
+        Gate training logic:
+          - if self.init_frozen == False -> gates are always non-trainable (remain requires_grad=False)
+          - else (init_frozen == True) -> gate.requires_grad = (status == LevelStatus.TRAIN)
+        """
         assert isinstance(status, LevelStatus), f"Invalid status: {status}"
         if level_idx < 0 or level_idx >= self.num_levels():
             raise IndexError(f"Level index {level_idx} is out of range")
+
         self.level_status[level_idx] = status
-        requires_grad = status == LevelStatus.TRAIN
+        requires_grad = (status == LevelStatus.TRAIN)
+
+        # toggle level model parameters
         for param in self.models[level_idx].parameters():
             param.requires_grad = requires_grad
+
+        # toggle gate requires_grad only when init_frozen is True
+        if self.init_frozen:
+            # gates train only when the corresponding level is TRAIN
+            self.gates[level_idx].requires_grad = requires_grad
+        else:
+            # init_frozen == False -> gates must remain non-trainable
+            self.gates[level_idx].requires_grad = False
 
     def set_all_status(self, status_list: list[LevelStatus]):
         assert len(status_list) == len(self.models), "Length mismatch in status list"
@@ -404,7 +481,9 @@ class MultiLevelNN(nn.Module):
 
     def print_status(self):
         for i, status in enumerate(self.level_status):
-            print(f"Level {i}: {status.name}")
+            gate_val = float(self.gates[i].detach().cpu().numpy())
+            gate_trainable = bool(self.gates[i].requires_grad)
+            print(f"Level {i}: {status.name}, gate={gate_val:.6f}, gate_trainable={gate_trainable}")
 
     def num_levels(self):
         return len(self.models)
@@ -423,6 +502,7 @@ class MultiLevelNN(nn.Module):
         for i, scale in enumerate(scale_list):
             self.set_scale(i, scale)
 
+    # ---------- forward / solution ----------
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ys = []
         for i, model in enumerate(self.models):
@@ -431,12 +511,16 @@ class MultiLevelNN(nn.Module):
                     x_scale = x
                 else:
                     x_scale = self.scales[i] * x
-                y = model.forward(x=x_scale)
+                y_raw = model.forward(x=x_scale)       # shape: (batch, dim_outputs)
+                gate = self.gates[i]                   # scalar parameter
+                # Broadcast gate to y shape automatically
+                y = gate * y_raw
                 ys.append(y)
+
         if not ys:
             # No active levels, return zeros with correct shape
             return torch.zeros((x.shape[0], self.dim_outputs), device=x.device)
-        # Concatenate along the column (feature) dimension
+
         out = torch.cat(ys, dim=1)
         assert out.shape[1] == self.num_active_levels() * self.dim_outputs
         return out
@@ -445,8 +529,7 @@ class MultiLevelNN(nn.Module):
         y = self.forward(x)
 
         n_active = self.num_active_levels()
-        # reshape to [batch_size, num_levels, dim_outputs]
-        # and sum over levels
+        # reshape to [batch_size, num_levels, dim_outputs] and sum over levels
         if n_active > 1:
             y = y.view(-1, n_active, self.dim_outputs)
             y = y.sum(dim=1)  # shape: (n, dim_outputs)
@@ -462,13 +545,6 @@ class MultiLevelNN(nn.Module):
             y = g0_vals + d_vals * y
 
         return y
-
-    # def _init_weights(self, m):
-    #    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-    #        nn.init.ones_(m.weight)
-    #        m.bias.data.fill_(0.01)
-    #    if type(m) == nn.Linear:
-    #        torch.nn.init.xavier_uniform(m.weight)  #
 
 # %%
 # Define Loss
@@ -584,6 +660,8 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
         save_frame(x=xf_eval, t=uf_analytic, y=uf_eval, xs=None,  ys=None,
                    iteration=[sweep_idx, level_idx, 0], title="Model_Frequencies", frame_dir=frame_dir)
+        save_frame(x=xf_eval, t=None, y=f_error, xs=None, ys=None,
+                   iteration=[sweep_idx, level_idx, 0], title="Frequencies_Errors", frame_dir=frame_dir)
         save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                    xs=to_np(mesh.x_train), ys=to_np(u_train),
                    iteration=[sweep_idx, level_idx, 0], title="Model_Outputs", frame_dir=frame_dir)
@@ -634,6 +712,7 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                 u_eval = model.get_solution(mesh.x_eval)[:, 0].unsqueeze(-1)
                 error = u_analytic - u_eval.to(u_analytic.device)
                 xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
+                f_error = uf_analytic - uf_eval
 
                 tracked_nn_coeffs = uf_eval[track_freqs]
                 tracked_true_coeffs = uf_analytic[track_freqs]
@@ -648,6 +727,8 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
                 save_frame(x=xf_eval, t=uf_analytic, y=uf_eval, xs=None,  ys=None,
                            iteration=[sweep_idx, level_idx, i+1], title="Model_Frequencies", frame_dir=frame_dir)
+                save_frame(x=xf_eval, t=None, y=f_error, xs=None, ys=None,
+                           iteration=[sweep_idx, level_idx, i+1], title="Frequencies_Errors", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=to_np(u_analytic), y=to_np(u_eval),
                            xs=to_np(mesh.x_train), ys=to_np(u_train),
                            iteration=[sweep_idx, level_idx, i+1], title="Model_Outputs", frame_dir=frame_dir)
@@ -786,6 +867,8 @@ def main(args=None):
                                output_file="Errors.mp4")
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Model_Frequencies",
                                output_file="Frequencies.mp4")
+        make_video_from_frames(frame_dir=frame_dir, name_prefix="Frequencies_Errors",
+                               output_file="Frequencies_Errors.mp4")
     return 0
 
 
