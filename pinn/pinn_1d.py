@@ -525,7 +525,13 @@ class MultiLevelNN(nn.Module):
         assert out.shape[1] == self.num_active_levels() * self.dim_outputs
         return out
 
-    def get_solution(self, x: torch.Tensor) -> torch.Tensor:
+    def get_bubble(self, x: torch.Tensor) -> torch.Tensor:
+        return self.d_func(x)
+
+    def get_bc_extension(self, x: torch.Tensor) -> torch.Tensor:
+        return self.g0_func(x)
+
+    def get_model(self, x: torch.Tensor) -> torch.Tensor:
         y = self.forward(x)
 
         n_active = self.num_active_levels()
@@ -533,8 +539,11 @@ class MultiLevelNN(nn.Module):
         if n_active > 1:
             y = y.view(-1, n_active, self.dim_outputs)
             y = y.sum(dim=1)  # shape: (n, dim_outputs)
-        #
 
+        return y
+
+    def get_solution(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.get_model(x)
         if self.enforce_bc:
             g0_vals = self.g0_func(x)
             d_vals = self.d_func(x)
@@ -637,6 +646,10 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
 
     u_analytic = mesh.pde.u_ex(mesh.x_eval)
     xf_analytic, uf_analytic, _, _ = fourier_analysis(to_np(mesh.x_eval), to_np(u_analytic), model.enforce_bc)
+    if model.enforce_bc:
+        d_val = model.get_bubble(mesh.x_eval)[:, 0].unsqueeze(-1)
+        g_val = model.get_bc_extension(mesh.x_eval)[:, 0].unsqueeze(-1)
+        y_analytic = (u_analytic - g_val) / d_val
 
     tracked_data = []
     L2_err, H1_err, H2_err = error_analysis(mesh.x_eval, u_analytic, model)
@@ -647,6 +660,8 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
         error = u_analytic - u_eval.to(u_analytic.device)
 
         xf_eval, uf_eval, uf_eval_real, uf_eval_imag = fourier_analysis(to_np(mesh.x_eval), to_np(u_eval), model.enforce_bc)
+        f_error = uf_analytic - uf_eval
+
         tracked_nn_coeffs = uf_eval[track_freqs]
         tracked_true_coeffs = uf_analytic[track_freqs]
         tracked_data.append({
@@ -667,6 +682,16 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                    iteration=[sweep_idx, level_idx, 0], title="Model_Outputs", frame_dir=frame_dir)
         save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error), xs=None, ys=None,
                    iteration=[sweep_idx, level_idx, 0], title="Model_Errors", frame_dir=frame_dir)
+        if model.enforce_bc:
+            y_train = model.get_model(mesh.x_train)[:, 0].unsqueeze(-1)
+            y_eval = model.get_model(mesh.x_eval)[:, 0].unsqueeze(-1)
+            y_error = y_analytic - y_eval
+            save_frame(x=to_np(mesh.x_eval), t=to_np(y_analytic), y=to_np(y_eval),
+                       xs=to_np(mesh.x_train), ys=to_np(y_train),
+                       iteration=[sweep_idx, level_idx, 0], title="NN_Model_Outputs", frame_dir=frame_dir)
+            save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(y_error), xs=None, ys=None,
+                       iteration=[sweep_idx, level_idx, 0], title="NN_Model_Errors", frame_dir=frame_dir)
+
     model.train()
 
     check_freq = (iterations + num_check - 1) // num_check
@@ -734,6 +759,16 @@ def train(model, mesh, criterion, iterations, adam_iterations, learning_rate, nu
                            iteration=[sweep_idx, level_idx, i+1], title="Model_Outputs", frame_dir=frame_dir)
                 save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(error), xs=None, ys=None,
                            iteration=[sweep_idx, level_idx, i+1], title="Model_Errors", frame_dir=frame_dir)
+                if model.enforce_bc:
+                    y_train = model.get_model(mesh.x_train)[:, 0].unsqueeze(-1)
+                    y_eval = model.get_model(mesh.x_eval)[:, 0].unsqueeze(-1)
+                    y_error = y_analytic - y_eval
+                    save_frame(x=to_np(mesh.x_eval), t=to_np(y_analytic), y=to_np(y_eval),
+                               xs=to_np(mesh.x_train), ys=to_np(y_train),
+                               iteration=[sweep_idx, level_idx, i+1], title="NN_Model_Outputs", frame_dir=frame_dir)
+                    save_frame(x=to_np(mesh.x_eval), t=None, y=to_np(y_error), xs=None, ys=None,
+                               iteration=[sweep_idx, level_idx, i+1], title="NN_Model_Errors", frame_dir=frame_dir)
+
             model.train()
 
     if track_freqs:
@@ -869,6 +904,11 @@ def main(args=None):
                                output_file="Frequencies.mp4")
         make_video_from_frames(frame_dir=frame_dir, name_prefix="Frequencies_Errors",
                                output_file="Frequencies_Errors.mp4")
+        if args.enforce_bc:
+            make_video_from_frames(frame_dir=frame_dir, name_prefix="NN_Model_Outputs",
+                                   output_file="NN_Solution.mp4")
+            make_video_from_frames(frame_dir=frame_dir, name_prefix="NN_Model_Errors",
+                                   output_file="NN_Errors.mp4")
     return 0
 
 
