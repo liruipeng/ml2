@@ -450,9 +450,9 @@ def plot_error_evolution(data: list, sweep_idx: int, level_idx: int, frame_dir: 
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Plot the three error metrics
-    ax.plot(epochs, l2_errors, label="L2 Relative Error", linestyle='-', marker='o', markevery=len(epochs)//10)
-    ax.plot(epochs, h1_errors, label="H1 Relative Error", linestyle='--', marker='s', markevery=len(epochs)//10)
-    ax.plot(epochs, h2_errors, label="H2 Relative Error", linestyle=':', marker='^', markevery=len(epochs)//10)
+    ax.plot(epochs, l2_errors, label="L2 Relative Error", linestyle='-', marker='o')
+    ax.plot(epochs, h1_errors, label="H1 Relative Error", linestyle='--', marker='s')
+    ax.plot(epochs, h2_errors, label="H2 Relative Error", linestyle=':', marker='^')
     
     ax.set_title(f"Sweep {sweep_idx}, Level {level_idx}: Solution Error Evolution")
     ax.set_xlabel("Epoch")
