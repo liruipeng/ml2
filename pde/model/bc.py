@@ -157,22 +157,15 @@ def get_d_func(domain_dim: int, domain_bounds: Union[Tuple[float, float], Tuple[
                      "Choose from 'quadratic_bubble', 'inf_smooth_bump', 'abs_dist_complement', "
                      "'ratio_bubble_dist', or 'sin_half_period'.")
 
-class BoundaryEnforcedModel(nn.Module):
-    """
-    Wraps a base model (like MultiLevelNN) to enforce boundary conditions.
-    Implements: u(x) = g0(x) + d(x) * NN(x)
-    """
-    def __init__(self, 
-                 base_model: nn.Module, 
-                 problem, 
-                 g0_type: str = "multilinear", 
-                 d_type: str = "sin_half_period"):
+class BoundaryEnforcedModel(torch.nn.Module):
+    def __init__(self, base_model, problem, g0_type="multilinear", d_type="sin_half_period"):
         super().__init__()
         self.base_model = base_model
         self.problem = problem
         
-        # Initialize the g0 and d functions using logic from bc.py
-        # These are generated based on the problem's analytical solution and bounds
+        # Get the device from the base model or problem
+        device = next(base_model.parameters()).device
+
         self.g0_func = get_g0_func(
             u_exact_func=problem.u_exact,
             domain_dim=problem.dim,
@@ -203,6 +196,13 @@ class BoundaryEnforcedModel(nn.Module):
         d_vals = torch.where(mask, torch.sign(d_vals) * 1e-8, d_vals)
         
         return g0_vals + d_vals * nn_output
+
+    def get_solution(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Alias for forward to maintain compatibility with 
+        existing analysis/visualization utils.
+        """
+        return self.forward(x)
 
     def get_unconstrained_prediction(self, x: torch.Tensor) -> torch.Tensor:
         """Returns just the NN(x) part for analysis/visualization."""

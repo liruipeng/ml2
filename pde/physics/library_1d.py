@@ -16,16 +16,23 @@ class Problem1(LinearEllipticProblem):
         self.c = torch.ones_like(self.w, device=device)
 
     def u_exact(self, x: torch.Tensor) -> torch.Tensor:
+        # Ensure internal parameters are on the same device as input x
+        w = self.w.to(x.device)
+        c = self.c.to(x.device)
+        
         y = torch.zeros_like(x)
-        for w, c in zip(self.w, self.c):
-            y += c * torch.sin(2 * w * torch.pi * x)
+        for val_w, val_c in zip(w, c):
+            y += val_c * torch.sin(2 * val_w * torch.pi * x)
         return y
 
     def source_term(self, x: torch.Tensor) -> torch.Tensor:
+        w = self.w.to(x.device)
+        c = self.c.to(x.device)
+        
         y = torch.zeros_like(x)
-        for w, c in zip(self.w, self.c):
-            pi_w = 2 * torch.pi * w
-            y += c * (pi_w**2 + self.gamma) * torch.sin(pi_w * x)
+        for val_w, val_c in zip(w, c):
+            pi_w = 2 * torch.pi * val_w
+            y += val_c * (pi_w**2 + self.gamma) * torch.sin(pi_w * x)
         return y
 
 class MScaleProblem(LinearEllipticProblem):

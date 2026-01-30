@@ -19,7 +19,7 @@ import torch
 import ast
 
 # %%
-def cleanfiles(dir_name):
+def clean_files(dir_name):
     dir_path = Path(dir_name)
     if dir_path.exists() and dir_path.is_dir():
         for item in dir_path.iterdir():

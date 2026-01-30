@@ -9,7 +9,8 @@ from solvers.losses import LossFactory
 from solvers.trainer import Trainer
 from model.arch import MultiLevelNN, LevelStatus
 from model.bc import BoundaryEnforcedModel
-from utils.control import parse_args, get_activation, print_args, clean_files
+from model.act import get_activation
+from utils.control import parse_args, print_args, clean_files
 from utils.analyze import fourier_analysis, error_analysis
 from utils.visualize import save_frame, make_video_from_frames, plot_error_evolution, plot_coefficient_evolution
 
@@ -26,7 +27,7 @@ def main():
     os.makedirs(frame_dir, exist_ok=True)
     
     if args.clear:
-        cleanfiles(frame_dir)
+        clean_files(frame_dir)
     
     print_args(args, output_file=f"{run_dir}/args.txt")
 
@@ -77,8 +78,8 @@ def main():
     # Training Loop with Analysis & Visualization
     u_analytic = problem.u_exact(mesh.get_test_grid(args.nx_eval))
     xf_analytic, uf_analytic, _, _ = fourier_analysis(
-        mesh.get_test_grid(args.nx_eval).cpu().numpy(), 
-        u_analytic.cpu().numpy(), 
+        mesh.get_test_grid(args.nx_eval).detach().cpu().numpy(), 
+        u_analytic.detach().cpu().numpy(), 
         args.enforce_bc
     )
 
@@ -92,16 +93,21 @@ def main():
             # Helper to run analysis during training
             def analysis_callback(epoch, loss_val):
                 model.eval()
+                x_test = mesh.get_test_grid(args.nx_eval)
+                u_pred = model(x_test)
+                u_train = model(mesh.generate_interior_points(args.nx[-1]))
+                    
+                # Error Metrics
+                L2_err, H1_err, H2_err = error_analysis(x_test, u_analytic, model)
+                        
+                print(f"Iteration {epoch:6d}: " #/{iterations:6d}: "#, {criterion.name}: {loss.item():.4e}, "
+                      f"L2 error: {L2_err: .4e}, "
+                      f"H1 error: {H1_err: .4e}, "
+                      f"H2 error: {H2_err: .4e}.")
+
                 with torch.no_grad():
-                    x_test = mesh.get_test_grid(args.nx_eval)
-                    u_pred = model(x_test)
-                    u_train = model(mesh.generate_interior_points(args.nx[-1]))
-                    
-                    # Error Metrics
-                    L2_err, H1_err, H2_err = error_analysis(x_test, u_analytic, model)
-                    
                     # Fourier Analysis
-                    xf, uf, _, _ = fourier_analysis(x_test.cpu().numpy(), u_pred.cpu().numpy(), args.enforce_bc)
+                    xf, uf, _, _ = fourier_analysis(x_test.detach().cpu().numpy(), u_pred.detach().cpu().numpy(), args.enforce_bc)
                     
                     # Store data for evolution plots
                     tracked_data.append({
@@ -111,7 +117,7 @@ def main():
                     })
 
                     # Save Visualization Frames
-                    save_frame(x=x_test.cpu().numpy(), t=u_analytic.cpu().numpy(), y=u_pred.cpu().numpy(),
+                    save_frame(x=x_test.detach().cpu().numpy(), t=u_analytic.detach().cpu().numpy(), y=u_pred.detach().cpu().numpy(),
                                xs=None, ys=None, iteration=[s, lev, epoch], 
                                title="Model_Outputs", frame_dir=frame_dir)
                 model.train()
